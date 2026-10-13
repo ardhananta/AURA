@@ -1,98 +1,170 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { AuthHeader } from '@/components/auth/AuthHeader';
+import { AuraInput } from '@/components/auth/AuraInput';
+import { GradientButton } from '@/components/auth/GradientButton';
+import { SocialDivider } from '@/components/auth/SocialDivider';
+import { useAuth } from '@/context/auth-context';
+import { getErrorMessage } from '@/utils/error-mapper';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+export default function LoginScreen() {
+  const router = useRouter();
+  const { login, isAuthenticated, user } = useAuth();
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+
+  const validate = () => {
+    const newErrors: { email?: string; password?: string } = {};
+    if (!email.trim()) {
+      newErrors.email = 'Alamat email wajib diisi';
+    } else if (!/\S+@\S+\.\S+/.test(email)) {
+      newErrors.email = 'Format email tidak valid';
+    }
+
+    if (!password) {
+      newErrors.password = 'Password wajib diisi';
+    } else if (password.length < 8) {
+      newErrors.password = 'Password minimal 8 karakter';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleLogin = async () => {
+    setServerError(null);
+    if (!validate()) return;
+
+    try {
+      setIsLoading(true);
+      await login(email.trim(), password);
+      // Success: redirect to dashboard
+      router.replace('/dashboard');
+    } catch (err: any) {
+      const message = getErrorMessage(err);
+      setServerError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = () => {
+    Alert.alert('Google Sign-In', 'Fitur Google Sign-In akan segera hadir.');
+  };
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
+    <KeyboardAvoidingView
+      className="flex-1 bg-white"
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={{ flexGrow: 1 }}
+        className="bg-white"
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+      >
+        {/* Curved Organic Header */}
+        <AuthHeader
+          title="Masuk"
+          subtitlePrefix="Belum punya akun?"
+          subtitleActionText="Buat akun"
+          onSubtitleActionPress={() => router.push('/register')}
+        />
+
+        {/* Form Body */}
+        <View className="px-7 pt-6 pb-12">
+          {/* Server Error Alert Banner */}
+          {serverError ? (
+            <View className="flex-row items-center gap-2 bg-red-50 border border-red-200 p-3 rounded-xl mb-4">
+              <Ionicons name="alert-circle" size={20} color="#EF4444" />
+              <Text className="text-[13px] text-red-700 flex-1 font-medium">
+                {serverError}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Active Session Notification (if already logged in) */}
+          {isAuthenticated && user ? (
+            <View className="flex-row items-center justify-between bg-blue-50 border border-blue-200 p-3 rounded-xl mb-4">
+              <View className="flex-1 mr-2">
+                <Text className="text-xs text-aura-primary font-semibold">
+                  Sesi Aktif: {user.name}
+                </Text>
+                <Text className="text-[11px] text-slate-500">{user.email}</Text>
+              </View>
+              <Pressable
+                onPress={() => router.replace('/dashboard')}
+                className="bg-aura-primary py-1 px-3 rounded-lg"
+              >
+                <Text className="text-white text-xs font-bold">Buka App</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {/* Email Input */}
+          <AuraInput
+            labelPlaceholder="Alamat Email"
+            value={email}
+            onChangeText={(text) => {
+              setEmail(text);
+              if (serverError) setServerError(null);
+              if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }));
+            }}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            error={errors.email}
+          />
+
+          {/* Password Input with Eye Box */}
+          <AuraInput
+            labelPlaceholder="Password"
+            isPassword
+            value={password}
+            onChangeText={(text) => {
+              setPassword(text);
+              if (serverError) setServerError(null);
+              if (errors.password) setErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            error={errors.password}
+          />
+
+          {/* Forgot Password Link */}
+          <Pressable
+            onPress={() => router.push('/forgot-password')}
+            className="self-start mt-0.5 mb-6 active:opacity-70"
+            hitSlop={8}
+          >
+            <Text className="text-aura-primary text-sm font-medium">
+              Lupa password kamu?
+            </Text>
+          </Pressable>
+
+          {/* Action Button */}
+          <GradientButton
+            title="Masuk"
+            onPress={handleLogin}
+            isLoading={isLoading}
+            className="mt-1"
+          />
+
+          {/* Social Divider & Google Button */}
+          <SocialDivider onGooglePress={handleGoogleLogin} />
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
-
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
-  },
-  title: {
-    textAlign: 'center',
-  },
-  code: {
-    textTransform: 'uppercase',
-  },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
-});
