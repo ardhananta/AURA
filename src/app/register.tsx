@@ -72,21 +72,19 @@ export default function RegisterScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleRegister = async () => {
+  const handleRegister = () => {
     setServerError(null);
     if (!validate()) return;
 
-    try {
-      setIsLoading(true);
-      await register(name.trim(), email.trim(), password);
-      // Auto-logged in according to backend specification (tokens & user saved)
-      router.replace('/dashboard');
-    } catch (err: any) {
-      const message = getErrorMessage(err);
-      setServerError(message);
-    } finally {
-      setIsLoading(false);
-    }
+    // Lanjutkan ke layar Tentang kamu untuk melengkapi data wajib (usia, tinggi badan, waktu di jalan)
+    router.push({
+      pathname: '/complete-profile',
+      params: {
+        name: name.trim(),
+        email: email.trim(),
+        password,
+      },
+    });
   };
 
   const handleGoogleRegister = () => {
@@ -191,7 +189,7 @@ export default function RegisterScreen() {
 
           {/* Action Button */}
           <GradientButton
-            title="Buat Akun"
+            title="Lanjutkan"
             onPress={handleRegister}
             isLoading={isLoading}
             className="mt-1"

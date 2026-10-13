@@ -20,6 +20,7 @@ interface AuthHeaderProps {
   showBackButton?: boolean;
   onBackPress?: () => void;
   className?: string;
+  compact?: boolean;
 }
 
 export const AuthHeader: React.FC<AuthHeaderProps> = ({
@@ -31,16 +32,19 @@ export const AuthHeader: React.FC<AuthHeaderProps> = ({
   showBackButton = false,
   onBackPress,
   className = '',
+  compact = false,
 }) => {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
   // Responsive header dimensions
-  const headerHeight = Math.max(250, insets.top + 190);
+  const headerHeight = compact
+    ? Math.max(180, insets.top + 120)
+    : Math.max(250, insets.top + 190);
   const startY = headerHeight;
-  const endY = headerHeight - 55;
+  const endY = compact ? headerHeight - 40 : headerHeight - 55;
   const controlX = width * 0.45;
-  const controlY = headerHeight + 15;
+  const controlY = compact ? headerHeight + 10 : headerHeight + 15;
 
   const pathData = `
     M 0,0
@@ -89,7 +93,11 @@ export const AuthHeader: React.FC<AuthHeaderProps> = ({
           </Pressable>
         )}
 
-        <Text className="text-[34px] font-bold text-white tracking-tight mb-2">
+        <Text
+          className={`${
+            compact ? 'text-[27px] mb-1' : 'text-[34px] mb-2'
+          } font-bold text-white tracking-tight`}
+        >
           {title}
         </Text>
 

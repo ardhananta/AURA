@@ -16,6 +16,7 @@ import { GradientButton } from '@/components/auth/GradientButton';
 import { SocialDivider } from '@/components/auth/SocialDivider';
 import { useAuth } from '@/context/auth-context';
 import { getErrorMessage } from '@/utils/error-mapper';
+import { isProfileComplete } from '@/types/auth';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -51,9 +52,13 @@ export default function LoginScreen() {
 
     try {
       setIsLoading(true);
-      await login(email.trim(), password);
-      // Success: redirect to dashboard
-      router.replace('/dashboard');
+      const res = await login(email.trim(), password);
+      // Jika profil belum lengkap (usia/tinggi/waktu di jalan), wajib lengkapi dulu
+      if (isProfileComplete(res.user)) {
+        router.replace('/dashboard');
+      } else {
+        router.replace('/complete-profile');
+      }
     } catch (err: any) {
       const message = getErrorMessage(err);
       setServerError(message);
@@ -107,10 +112,18 @@ export default function LoginScreen() {
                 <Text className="text-[11px] text-slate-500">{user.email}</Text>
               </View>
               <Pressable
-                onPress={() => router.replace('/dashboard')}
+                onPress={() => {
+                  if (isProfileComplete(user)) {
+                    router.replace('/dashboard');
+                  } else {
+                    router.replace('/complete-profile');
+                  }
+                }}
                 className="bg-aura-primary py-1 px-3 rounded-lg"
               >
-                <Text className="text-white text-xs font-bold">Buka App</Text>
+                <Text className="text-white text-xs font-bold">
+                  {isProfileComplete(user) ? 'Buka App' : 'Lengkapi Profil'}
+                </Text>
               </Pressable>
             </View>
           ) : null}

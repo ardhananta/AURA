@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/context/auth-context';
 import { authApi } from '@/services/api';
 import { AuraColors } from '@/constants/aura-theme';
+import { isProfileComplete } from '@/types/auth';
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -19,6 +20,13 @@ export default function DashboardScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [apiResponseInfo, setApiResponseInfo] = useState<string | null>(null);
+
+  // Jika user belum melengkapi profil tentang kamu, wajib redirect ke complete-profile
+  useEffect(() => {
+    if (user && !isProfileComplete(user)) {
+      router.replace('/complete-profile');
+    }
+  }, [user, router]);
 
   const handleTestGetMe = async () => {
     try {
@@ -83,9 +91,18 @@ export default function DashboardScreen() {
       <View className="px-6 mt-6">
         {/* User Profile Card */}
         <View className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-5">
-          <Text className="text-slate-800 text-base font-bold mb-3 flex-row items-center">
-            Informasi Akun
-          </Text>
+          <View className="flex-row items-center justify-between mb-3">
+            <Text className="text-slate-800 text-base font-bold">
+              Informasi Akun
+            </Text>
+            <Pressable
+              onPress={() => router.push('/complete-profile')}
+              className="flex-row items-center gap-1 bg-blue-50 px-2.5 py-1 rounded-lg active:bg-blue-100"
+            >
+              <Ionicons name="create-outline" size={14} color={AuraColors.primary} />
+              <Text className="text-aura-primary text-xs font-bold">Ubah Profil</Text>
+            </Pressable>
+          </View>
 
           <View className="space-y-3">
             <View className="flex-row justify-between py-2 border-b border-slate-100">
@@ -96,6 +113,34 @@ export default function DashboardScreen() {
             <View className="flex-row justify-between py-2 border-b border-slate-100">
               <Text className="text-slate-500 text-sm">Email Terdaftar</Text>
               <Text className="text-slate-800 text-sm font-semibold">{user?.email || '-'}</Text>
+            </View>
+
+            <View className="flex-row justify-between py-2 border-b border-slate-100">
+              <Text className="text-slate-500 text-sm">Usia</Text>
+              <Text className="text-slate-800 text-sm font-semibold">
+                {user?.usia !== undefined && user?.usia !== null ? `${user.usia} tahun` : '-'}
+              </Text>
+            </View>
+
+            <View className="flex-row justify-between py-2 border-b border-slate-100">
+              <Text className="text-slate-500 text-sm">Tinggi Badan</Text>
+              <Text className="text-slate-800 text-sm font-semibold">
+                {user?.tinggi_badan !== undefined && user?.tinggi_badan !== null ? `${user.tinggi_badan} cm` : '-'}
+              </Text>
+            </View>
+
+            <View className="flex-row justify-between py-2 border-b border-slate-100">
+              <Text className="text-slate-500 text-sm">Berat Badan</Text>
+              <Text className="text-slate-800 text-sm font-semibold">
+                {user?.berat_badan !== undefined && user?.berat_badan !== null ? `${user.berat_badan} kg` : '-'}
+              </Text>
+            </View>
+
+            <View className="flex-row justify-between py-2 border-b border-slate-100">
+              <Text className="text-slate-500 text-sm">Waktu di Jalan</Text>
+              <Text className="text-slate-800 text-sm font-semibold">
+                {user?.waktu_di_jalan !== undefined && user?.waktu_di_jalan !== null ? `${user.waktu_di_jalan} jam/hari` : '-'}
+              </Text>
             </View>
 
             <View className="flex-row justify-between py-2 border-b border-slate-100">

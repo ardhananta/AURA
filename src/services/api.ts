@@ -5,6 +5,8 @@ import {
   AuthResponseData,
   User,
   AuthTokens,
+  RegisterPayload,
+  UpdateProfilePayload,
 } from '@/types/auth';
 
 export const BASE_URL =
@@ -102,11 +104,7 @@ export const authApi = {
    * Register new user
    * POST /api/auth/register
    */
-  register: async (payload: {
-    name: string;
-    email: string;
-    password: string;
-  }): Promise<AuthResponseData> => {
+  register: async (payload: RegisterPayload): Promise<AuthResponseData> => {
     const res = await api.post<ApiResponse<AuthResponseData>>(
       '/api/auth/register',
       payload
@@ -115,6 +113,22 @@ export const authApi = {
       throw res.data;
     }
     return res.data.data;
+  },
+
+  /**
+   * Update authenticated user profile
+   * PUT /api/auth/profile
+   */
+  updateProfile: async (payload: UpdateProfilePayload): Promise<User> => {
+    const res = await api.put<ApiResponse<{ user: User } | User>>(
+      '/api/auth/profile',
+      payload
+    );
+    if (!res.data.success) {
+      throw res.data;
+    }
+    const data = res.data.data;
+    return 'user' in data ? data.user : (data as unknown as User);
   },
 
   /**

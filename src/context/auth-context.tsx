@@ -9,14 +9,15 @@ import React, {
 import { useRouter } from 'expo-router';
 import { authApi, setOnSessionExpired } from '@/services/api';
 import { TokenStorage } from '@/services/storage';
-import { User, AuthResponseData } from '@/types/auth';
+import { User, AuthResponseData, RegisterPayload, UpdateProfilePayload } from '@/types/auth';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<AuthResponseData>;
-  register: (name: string, email: string, password: string) => Promise<AuthResponseData>;
+  register: (payload: RegisterPayload) => Promise<AuthResponseData>;
+  updateProfile: (payload: UpdateProfilePayload) => Promise<User>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
 }
@@ -66,15 +67,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return data;
   };
 
-  const register = async (
-    name: string,
-    email: string,
-    password: string
-  ): Promise<AuthResponseData> => {
-    const data = await authApi.register({ name, email, password });
+  const register = async (payload: RegisterPayload): Promise<AuthResponseData> => {
+    const data = await authApi.register(payload);
     await TokenStorage.saveTokens(data.tokens);
     setUser(data.user);
     return data;
+  };
+
+  const updateProfile = async (payload: UpdateProfilePayload): Promise<User> => {
+    const updatedUser = await authApi.updateProfile(payload);
+    setUser((prev) => (prev ? { ...prev, ...updatedUser } : updatedUser));
+    return updatedUser;
   };
 
   const logout = async (): Promise<void> => {
@@ -92,6 +95,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isAuthenticated: !!user,
     login,
     register,
+    updateProfile,
     logout,
     checkAuth,
   };

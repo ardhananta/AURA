@@ -40,6 +40,8 @@ export default function RootLayout() {
               <Stack.Screen name="index" />
               <Stack.Screen name="login" />
               <Stack.Screen name="register" />
+              <Stack.Screen name="complete-profile" />
+              <Stack.Screen name="complete-register" />
               <Stack.Screen name="forgot-password" />
               <Stack.Screen name="dashboard" />
               <Stack.Screen name="explore" />
