@@ -4,6 +4,14 @@ module.exports = {
   presets: [require('nativewind/preset')],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['PlusJakartaSans_400Regular', 'sans-serif'],
+        regular: ['PlusJakartaSans_400Regular'],
+        medium: ['PlusJakartaSans_500Medium'],
+        semibold: ['PlusJakartaSans_600SemiBold'],
+        bold: ['PlusJakartaSans_700Bold'],
+        extrabold: ['PlusJakartaSans_800ExtraBold'],
+      },
       colors: {
         aura: {
           primary: '#2373F4',

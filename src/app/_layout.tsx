@@ -1,15 +1,23 @@
 import '@/global.css';
-import { DefaultTheme, ThemeProvider } from 'expo-router';
-import { Stack } from 'expo-router';
+import React, { useEffect } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { DefaultTheme, ThemeProvider, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import {
+  useFonts,
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
+} from '@expo-google-fonts/plus-jakarta-sans';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AuthProvider } from '@/context/auth-context';
 import { AuraColors } from '@/constants/aura-theme';
+import { applyGlobalFont } from '@/utils/apply-global-font';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -23,6 +31,25 @@ const AuraNavigationTheme = {
 };
 
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
+  });
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      applyGlobalFont();
+      SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
   return (
     <SafeAreaProvider>
       <AuthProvider>
@@ -74,6 +101,7 @@ export default function RootLayout() {
                 }}
               />
               <Stack.Screen name="dashboard" />
+              <Stack.Screen name="pollution-impact" />
               <Stack.Screen name="explore" />
             </Stack>
           </View>
