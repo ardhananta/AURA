@@ -14,6 +14,7 @@ import { AuthHeader } from '@/components/auth/AuthHeader';
 import { AuraInput } from '@/components/auth/AuraInput';
 import { GradientButton } from '@/components/auth/GradientButton';
 import { SocialDivider } from '@/components/auth/SocialDivider';
+import { AnimatedAuthHeader, AnimatedAuthBody } from '@/components/auth/AuthTransition';
 import { useAuth } from '@/context/auth-context';
 import { getErrorMessage } from '@/utils/error-mapper';
 
@@ -76,7 +77,6 @@ export default function RegisterScreen() {
     setServerError(null);
     if (!validate()) return;
 
-    // Lanjutkan ke layar Tentang kamu untuk melengkapi data wajib (usia, tinggi badan, waktu di jalan)
     router.push({
       pathname: '/complete-profile',
       params: {
@@ -102,15 +102,16 @@ export default function RegisterScreen() {
         keyboardShouldPersistTaps="handled"
         bounces={false}
       >
-        {/* Curved Organic Header */}
-        <AuthHeader
-          title="Buat Akun"
-          subtitlePrefix="Sudah punya akun?"
-          subtitleActionText="Masuk"
-          onSubtitleActionPress={() => router.push('/')}
-        />
+        {/* Curved Organic Header with swap animation */}
+        <AnimatedAuthHeader>
+          <AuthHeader
+            title="Buat Akun"
+            onSubtitleActionPress={() => router.push('/')}
+          />
+        </AnimatedAuthHeader>
 
-        {/* Form Body */}
+        {/* Form Body with slide-up animation */}
+        <AnimatedAuthBody delay={180}>
         <View className="px-7 pt-6 pb-12">
           {/* Server Error Alert Banner */}
           {serverError ? (
@@ -194,10 +195,22 @@ export default function RegisterScreen() {
             isLoading={isLoading}
             className="mt-1"
           />
+          {/* Sudah punya akun? Masuk */}
+          <Pressable
+            onPress={() => router.push('/')}
+            className="self-center mt-4 mb-5 py-1 active:opacity-70"
+            hitSlop={8}
+          >
+            <Text className="text-sm text-slate-500">
+              Sudah punya akun?{' '}
+              <Text className="text-aura-primary font-bold">Masuk</Text>
+            </Text>
+          </Pressable>
 
           {/* Social Divider & Google Button */}
           <SocialDivider onGooglePress={handleGoogleRegister} />
         </View>
+        </AnimatedAuthBody>
       </ScrollView>
     </KeyboardAvoidingView>
   );

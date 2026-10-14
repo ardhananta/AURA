@@ -14,6 +14,7 @@ import { AuthHeader } from '@/components/auth/AuthHeader';
 import { AuraInput } from '@/components/auth/AuraInput';
 import { GradientButton } from '@/components/auth/GradientButton';
 import { SocialDivider } from '@/components/auth/SocialDivider';
+import { AuthTransition, AnimatedAuthHeader, AnimatedAuthBody } from '@/components/auth/AuthTransition';
 import { useAuth } from '@/context/auth-context';
 import { getErrorMessage } from '@/utils/error-mapper';
 import { isProfileComplete } from '@/types/auth';
@@ -82,15 +83,15 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         bounces={false}
       >
-        {/* Curved Organic Header */}
-        <AuthHeader
-          title="Masuk"
-          subtitlePrefix="Belum punya akun?"
-          subtitleActionText="Buat akun"
-          onSubtitleActionPress={() => router.push('/register')}
-        />
+        {/* Curved Organic Header with swap animation */}
+        <AnimatedAuthHeader>
+          <AuthHeader
+            title="Masuk"
+          />
+        </AnimatedAuthHeader>
 
-        {/* Form Body */}
+        {/* Form Body with slide-up animation */}
+        <AnimatedAuthBody delay={180}>
         <View className="px-7 pt-6 pb-12">
           {/* Server Error Alert Banner */}
           {serverError ? (
@@ -174,9 +175,22 @@ export default function LoginScreen() {
             className="mt-1"
           />
 
+          {/* Belum punya akun? Buat akun */}
+          <Pressable
+            onPress={() => router.push('/register')}
+            className="self-center mt-4 mb-5 py-1 active:opacity-70"
+            hitSlop={8}
+          >
+            <Text className="text-sm text-slate-500">
+              Belum punya akun?{' '}
+              <Text className="text-aura-primary font-bold">Buat akun</Text>
+            </Text>
+          </Pressable>
+
           {/* Social Divider & Google Button */}
           <SocialDivider onGooglePress={handleGoogleLogin} />
         </View>
+        </AnimatedAuthBody>
       </ScrollView>
     </KeyboardAvoidingView>
   );

@@ -67,8 +67,8 @@ export const AuthHeader: React.FC<AuthHeaderProps> = ({
       >
         <Defs>
           <SvgLinearGradient id="auraHeaderGradient" x1="1" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={AuraColors.cyan} />
-            <Stop offset="35%" stopColor={AuraColors.secondary} />
+            <Stop offset="0%" stopColor="#4A9CF4" />
+            <Stop offset="45%" stopColor="#2D7DF6" />
             <Stop offset="100%" stopColor={AuraColors.primary} />
           </SvgLinearGradient>
         </Defs>
@@ -79,13 +79,13 @@ export const AuthHeader: React.FC<AuthHeaderProps> = ({
       <View
         className="px-7"
         style={{
-          paddingTop: insets.top + (showBackButton ? 8 : 28),
+          paddingTop: insets.top + (showBackButton ? 8 : (compact ? 45 : 60)),
         }}
       >
         {showBackButton && (
           <Pressable
             onPress={onBackPress}
-            className="mb-3 self-start w-9 h-9 rounded-full bg-white/20 items-center justify-center active:opacity-70"
+            className="mb-4 self-start w-9 h-9 rounded-full bg-white/20 items-center justify-center active:opacity-70"
             hitSlop={12}
             accessibilityLabel="Kembali"
           >

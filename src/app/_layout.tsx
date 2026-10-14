@@ -37,12 +37,42 @@ export default function RootLayout() {
                 animation: 'slide_from_right',
               }}
             >
-              <Stack.Screen name="index" />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="register" />
-              <Stack.Screen name="complete-profile" />
+              <Stack.Screen
+                name="index"
+                options={{
+                  animation: 'fade',
+                  animationDuration: 300,
+                }}
+              />
+              <Stack.Screen
+                name="login"
+                options={{
+                  animation: 'fade',
+                  animationDuration: 300,
+                }}
+              />
+              <Stack.Screen
+                name="register"
+                options={{
+                  animation: 'ios_from_right',
+                  animationDuration: 350,
+                }}
+              />
+              <Stack.Screen
+                name="complete-profile"
+                options={{
+                  animation: 'ios_from_right',
+                  animationDuration: 350,
+                }}
+              />
               <Stack.Screen name="complete-register" />
-              <Stack.Screen name="forgot-password" />
+              <Stack.Screen
+                name="forgot-password"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: 350,
+                }}
+              />
               <Stack.Screen name="dashboard" />
               <Stack.Screen name="explore" />
             </Stack>

@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AuthHeader } from '@/components/auth/AuthHeader';
 import { AuraInput } from '@/components/auth/AuraInput';
 import { GradientButton } from '@/components/auth/GradientButton';
+import { AnimatedAuthHeader, AnimatedAuthBody } from '@/components/auth/AuthTransition';
 import { AuraColors } from '@/constants/aura-theme';
 
 export default function ForgotPasswordScreen() {
@@ -61,15 +62,18 @@ export default function ForgotPasswordScreen() {
         keyboardShouldPersistTaps="handled"
         bounces={false}
       >
-        {/* Curved Organic Header */}
-        <AuthHeader
-          title="Lupa Password?"
-          simpleSubtitle="Tenang, kami bantu ya."
-          showBackButton
-          onBackPress={() => router.back()}
-        />
+        {/* Curved Organic Header with swap animation */}
+        <AnimatedAuthHeader>
+          <AuthHeader
+            title="Lupa Password?"
+            simpleSubtitle="Tenang, kami bantu ya."
+            showBackButton
+            onBackPress={() => router.back()}
+          />
+        </AnimatedAuthHeader>
 
-        {/* Form Body */}
+        {/* Form Body with slide-up animation */}
+        <AnimatedAuthBody delay={180}>
         <View className="px-7 pt-8 pb-12">
           {/* Informative prompt matching reference mockup */}
           <Text className="text-[14.5px] font-medium text-aura-primary leading-5 mb-6">
@@ -119,6 +123,7 @@ export default function ForgotPasswordScreen() {
             </Text>
           </Pressable>
         </View>
+        </AnimatedAuthBody>
       </ScrollView>
     </KeyboardAvoidingView>
   );

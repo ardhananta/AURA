@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  View,
   Text,
   Pressable,
   ActivityIndicator,
@@ -7,7 +8,6 @@ import {
   TextStyle,
   StyleSheet,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { AuraColors } from '@/constants/aura-theme';
 
 interface GradientButtonProps {
@@ -43,12 +43,7 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
       accessibilityRole="button"
       accessibilityState={{ disabled: disabled || isLoading, busy: isLoading }}
     >
-      <LinearGradient
-        colors={['#53CEF8', '#2373F4']}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 1, y: 0.5 }}
-        style={styles.gradient}
-      >
+      <View style={styles.solidButton}>
         {isLoading ? (
           <ActivityIndicator color={AuraColors.white} size="small" />
         ) : (
@@ -56,7 +51,7 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
             {title}
           </Text>
         )}
-      </LinearGradient>
+      </View>
     </Pressable>
   );
 };
@@ -80,13 +75,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     elevation: 1,
   },
-  gradient: {
+  solidButton: {
     height: 54,
     borderRadius: 9999,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
+    backgroundColor: AuraColors.primary,
   },
   text: {
     color: '#FFFFFF',

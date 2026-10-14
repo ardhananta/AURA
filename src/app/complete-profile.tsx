@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AuthHeader } from '@/components/auth/AuthHeader';
 import { ProfileInput } from '@/components/auth/ProfileInput';
 import { GradientButton } from '@/components/auth/GradientButton';
+import { AnimatedAuthHeader, AnimatedAuthBody } from '@/components/auth/AuthTransition';
 import { useAuth } from '@/context/auth-context';
 import { getErrorMessage } from '@/utils/error-mapper';
 import { isProfileComplete } from '@/types/auth';
@@ -174,16 +175,19 @@ export default function CompleteProfileScreen() {
         bounces={true}
         showsVerticalScrollIndicator={true}
       >
-        {/* Curved Organic Header (Compact so form fits nicely) */}
-        <AuthHeader
-          title="Tentang kamu"
-          simpleSubtitle="Yuk, lengkapi profilmu dulu."
-          compact={true}
-          showBackButton={true}
-          onBackPress={handleBackPress}
-        />
+        {/* Curved Organic Header (Compact so form fits nicely) with swap animation */}
+        <AnimatedAuthHeader>
+          <AuthHeader
+            title="Tentang kamu"
+            simpleSubtitle="Yuk, lengkapi profilmu dulu."
+            compact={true}
+            showBackButton={true}
+            onBackPress={handleBackPress}
+          />
+        </AnimatedAuthHeader>
 
-        {/* Form Body */}
+        {/* Form Body with slide-up animation */}
+        <AnimatedAuthBody delay={180}>
         <View className="px-7 pt-3 pb-8">
           {/* Server Error Alert Banner */}
           {serverError ? (
@@ -287,6 +291,7 @@ export default function CompleteProfileScreen() {
             Agar rekomendasi Aura lebih sesuai untukmu.
           </Text>
         </View>
+        </AnimatedAuthBody>
       </ScrollView>
     </KeyboardAvoidingView>
   );
