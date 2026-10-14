@@ -181,10 +181,12 @@ export default function LoginScreen() {
             className="self-center mt-4 mb-5 py-1 active:opacity-70"
             hitSlop={8}
           >
-            <Text className="text-sm text-slate-500">
-              Belum punya akun?{' '}
-              <Text className="text-aura-primary font-bold">Buat akun</Text>
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text className="text-sm text-slate-500">
+                Belum punya akun?{' '}
+              </Text>
+              <Text style={{ color: '#2373F4', fontWeight: '700', fontSize: 14 }}>Buat akun</Text>
+            </View>
           </Pressable>
 
           {/* Social Divider & Google Button */}

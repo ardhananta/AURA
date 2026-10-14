@@ -103,6 +103,13 @@ export default function RootLayout() {
               <Stack.Screen name="dashboard" />
               <Stack.Screen name="pollution-impact" />
               <Stack.Screen name="explore" />
+              <Stack.Screen
+                name="lung-check"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: 350,
+                }}
+              />
             </Stack>
           </View>
         </ThemeProvider>
