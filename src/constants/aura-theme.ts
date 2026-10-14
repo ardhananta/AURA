@@ -32,9 +32,9 @@ export const AuraColors = {
   headerSubtext: '#EBF4FF',
 
   // Gradient definitions
-  gradientHeader: ['#65D0F4', '#578EF5', '#2373F4'] as const,
-  gradientButton: ['#65D0F4', '#2373F4'] as const,
-  gradientButtonHover: ['#578EF5', '#1B5ECC'] as const,
+  gradientHeader: ['#4A9CF4', '#2D7DF6', '#2373F4'] as const,
+  gradientButton: ['#2373F4', '#2373F4'] as const,
+  gradientButtonHover: ['#1B5ECC', '#1B5ECC'] as const,
 
   // Status
   error: '#EF4444',
