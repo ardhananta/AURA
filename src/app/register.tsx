@@ -201,10 +201,12 @@ export default function RegisterScreen() {
             className="self-center mt-4 mb-5 py-1 active:opacity-70"
             hitSlop={8}
           >
-            <Text className="text-sm text-slate-500">
-              Sudah punya akun?{' '}
-              <Text className="text-aura-primary font-bold">Masuk</Text>
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text className="text-sm text-slate-500">
+                Sudah punya akun?{' '}
+              </Text>
+              <Text style={{ color: '#2373F4', fontWeight: '700', fontSize: 14 }}>Masuk</Text>
+            </View>
           </Pressable>
 
           {/* Social Divider & Google Button */}

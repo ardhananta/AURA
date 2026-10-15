@@ -119,7 +119,7 @@ export default function ForgotPasswordScreen() {
           >
             <Text className="text-sm text-slate-500">
               Sudah ingat password?{' '}
-              <Text className="text-aura-primary font-bold underline">Masuk</Text>
+              <Text style={{ color: '#2373F4', fontWeight: '700', textDecorationLine: 'underline' }}>Masuk</Text>
             </Text>
           </Pressable>
         </View>
