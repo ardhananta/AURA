@@ -249,9 +249,7 @@ export default function DashboardScreen() {
         >
           {/* Cek Kesehatan Paru */}
           <Pressable
-            onPress={() =>
-              Alert.alert('Cek Kesehatan Paru', 'Membuka fitur skrining & cek kesehatan paru.')
-            }
+            onPress={() => router.push('/lung-check')}
             style={{ alignItems: 'center', flex: 1 }}
           >
             <Image
@@ -688,9 +686,7 @@ export default function DashboardScreen() {
 
             {/* Cek Button */}
             <Pressable
-              onPress={() =>
-                Alert.alert('Kebutuhan Kesehatan', 'Melihat rekomendasi obat & pencegahan polusi.')
-              }
+              onPress={() => router.push('/ceksekarang')}
               style={{
                 backgroundColor: '#FFFFFF',
                 borderRadius: 999,

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,20 +6,139 @@ import {
   StyleSheet,
   StatusBar,
   Platform,
-  Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import * as Location from 'expo-location';
 import { HOSPITALS_DATA, HospitalItem } from '@/data/medical-partners';
+import { getPrecomputedRoute } from '@/data/hospital-routes-precomputed';
 import { locationService } from '@/services/locationService';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Haversine formula to compute distance in meters between two lat/lon points
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // meters
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// Compute compass bearing (0-360 deg) from point 1 to point 2
+function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  const brng = toDeg(Math.atan2(y, x));
+  return (brng + 360) % 360;
+}
+
+// Format meters to human readable distance (e.g., "350 m" or "2,4 km")
+function formatDistance(meters: number): string {
+  if (meters < 1000) {
+    return `${Math.max(10, Math.round(meters))} m`;
+  }
+  return `${(meters / 1000).toFixed(1).replace('.', ',')} km`;
+}
+
+// Format seconds to human readable duration (e.g., "5 menit" or "1 jam 12 mnt")
+function formatDuration(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins <= 1) return '1 menit';
+  if (mins < 60) return `${mins} menit`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs} jam ${remMins} mnt` : `${hrs} jam`;
+}
+
+// Format timestamp to arrival time string "Tiba HH.mm"
+function formatEtaTime(durationSeconds: number): string {
+  const arrival = new Date(Date.now() + durationSeconds * 1000);
+  const hh = arrival.getHours().toString().padStart(2, '0');
+  const mm = arrival.getMinutes().toString().padStart(2, '0');
+  return `Tiba ${hh}.${mm}`;
+}
+
+interface ManeuverStep {
+  distanceMeters: number;
+  actionText: string;
+  roadText: string;
+  iconName: keyof typeof Ionicons.glyphMap;
+}
+
+interface RouteCalculationResult {
+  distanceMeters: number;
+  durationSeconds: number;
+  coordinates: [number, number][]; // [lon, lat]
+  summaryRoads: string;
+  firstManeuver: ManeuverStep;
+  nextManeuver: ManeuverStep;
+}
+
+// Helper to translate turn maneuvers into Indonesian instructions
+function parseManeuver(step: any, defaultRoad: string): ManeuverStep {
+  if (!step) {
+    return {
+      distanceMeters: 150,
+      actionText: 'Lurus terus',
+      roadText: defaultRoad,
+      iconName: 'arrow-up',
+    };
+  }
+  const type = step.type || step.maneuver?.type || 'turn';
+  const mod = step.modifier || step.maneuver?.modifier || '';
+  const rawName = step.name ? step.name.trim() : '';
+  const roadName = rawName ? (rawName.startsWith('Jl') ? rawName : `Jl. ${rawName}`) : defaultRoad;
+
+  let actionText = 'Lurus terus';
+  let iconName: keyof typeof Ionicons.glyphMap = 'arrow-up';
+
+  if (mod.includes('left')) {
+    actionText = mod.includes('sharp')
+      ? 'Belok tajam ke kiri'
+      : mod.includes('slight')
+      ? 'Ambil serong kiri'
+      : 'Belok kiri';
+    iconName = 'arrow-undo';
+  } else if (mod.includes('right')) {
+    actionText = mod.includes('sharp')
+      ? 'Belok tajam ke kanan'
+      : mod.includes('slight')
+      ? 'Ambil serong kanan'
+      : 'Belok kanan';
+    iconName = 'arrow-redo';
+  } else if (mod === 'uturn') {
+    actionText = 'Putar balik';
+    iconName = 'refresh';
+  } else if (type === 'roundabout') {
+    actionText = 'Masuk bundaran';
+    iconName = 'refresh-circle';
+  } else if (type === 'arrive') {
+    actionText = 'Tiba di tujuan';
+    iconName = 'location';
+  }
+
+  return {
+    distanceMeters: Math.round(step.distance || 150),
+    actionText,
+    roadText: `ke ${roadName}`,
+    iconName,
+  };
+}
 
 export default function HospitalRouteScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const webViewRef = useRef<WebView>(null);
   const params = useLocalSearchParams<{ hospitalId?: string }>();
 
   // Find target hospital or fallback to RSUP Dr Kariadi
@@ -28,58 +147,312 @@ export default function HospitalRouteScreen() {
     return found || HOSPITALS_DATA[0];
   }, [params.hospitalId]);
 
-  // Mode: 'preview' (Pratinjau Rute) or 'navigation' (Mulai Navigasi Langsung)
+  // Mode: 'preview' (Pratinjau Rute) or 'navigation' (Mulai Navigasi Langsung 3D GIS)
   const [mode, setMode] = useState<'preview' | 'navigation'>('preview');
   const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
 
-  // User coordinates (Default: Randusari/Bergota area near RSUP Dr Kariadi)
+  // User coordinates (Default: Semarang Randusari area near RSUP Dr Kariadi)
   const [userCoord, setUserCoord] = useState({
     lat: -7.0015,
     lon: 110.4128,
-    name: 'Lokasi Anda',
+    name: 'Lokasi Anda (Semarang)',
   });
 
+  // Dynamic route data initialized directly with authentic street polyline
+  const [routeData, setRouteData] = useState<RouteCalculationResult>(() => {
+    const pre = getPrecomputedRoute(hospital.id);
+    const steps = pre.steps || [];
+    const firstStepDist = steps.length > 0 ? Math.round(steps[0].distance) : 200;
+    const nextStepObj = steps.length > 1 ? steps[1] : steps[0];
+    const subStepObj = steps.length > 2 ? steps[2] : null;
+
+    const firstManeuver = parseManeuver(nextStepObj, hospital.name);
+    firstManeuver.distanceMeters = firstStepDist > 0 ? firstStepDist : firstManeuver.distanceMeters;
+
+    const nextManeuver = parseManeuver(subStepObj, hospital.name);
+    nextManeuver.roadText = nextManeuver.roadText.replace(/^ke\s+/i, '');
+
+    return {
+      distanceMeters: pre.distanceMeters,
+      durationSeconds: pre.durationSeconds,
+      coordinates: pre.coordinates,
+      summaryRoads: pre.summaryRoads ? `Via ${pre.summaryRoads}` : `Menuju ${hospital.name}`,
+      firstManeuver,
+      nextManeuver,
+    };
+  });
+
+  // Navigation live telemetry state
+  const [currentVehiclePos, setCurrentVehiclePos] = useState({
+    lat: userCoord.lat,
+    lon: userCoord.lon,
+    heading: 0,
+  });
+  const [remainingMeters, setRemainingMeters] = useState(routeData.distanceMeters);
+  const [traveledMeters, setTraveledMeters] = useState(0);
+
+  // 1. Fetch real-time user GPS position on mount
   useEffect(() => {
-    const getGps = async () => {
+    let isMounted = true;
+    const loadGps = async () => {
+      setIsLocating(true);
       const res = await locationService.getCurrentGpsLocation();
-      if (res.success && res.location) {
+      if (isMounted && res.success && res.location) {
         setUserCoord({
           lat: res.location.lat,
           lon: res.location.lon,
-          name: 'Lokasi Anda',
+          name: res.location.name || 'Lokasi GPS Anda',
         });
+        setCurrentVehiclePos({
+          lat: res.location.lat,
+          lon: res.location.lon,
+          heading: 0,
+        });
+      } else if (isMounted) {
+        setUserCoord((prev) => ({
+          ...prev,
+          name: 'Randusari, Semarang Selatan',
+        }));
       }
+      if (isMounted) setIsLocating(false);
     };
-    getGps();
+    loadGps();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
+  // 2. Fetch real street-following routing from OpenStreetMap routing engine
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fetchRoute = async () => {
+      const startLat = userCoord.lat;
+      const startLon = userCoord.lon;
+      const destLat = hospital.coordinates.lat;
+      const destLon = hospital.coordinates.lon;
+
+      // Primary: High-performance OSM routed-car server (< 1s response)
+      // Secondary: OSRM router mirror
+      const endpoints = [
+        `https://routing.openstreetmap.de/routed-car/route/v1/driving/${startLon},${startLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`,
+        `https://router.project-osrm.org/route/v1/driving/${startLon},${startLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`,
+      ];
+
+      for (const url of endpoints) {
+        if (isCancelled) return;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          const response = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+
+          if (!response.ok) continue;
+          const data = await response.json();
+
+          if (data.code === 'Ok' && data.routes && data.routes.length > 0 && !isCancelled) {
+            const route = data.routes[0];
+            const legs = route.legs?.[0];
+            const steps = legs?.steps || [];
+            const coords: [number, number][] = route.geometry?.coordinates || [];
+
+            if (coords.length < 2) continue;
+
+            // Extract unique road names
+            const roadNames: string[] = Array.from(
+              new Set(
+                steps
+                  .map((s: any) => s.name?.trim())
+                  .filter((n: string) => n && n.length > 0)
+              )
+            );
+
+            let summaryRoads = 'Rute tercepat';
+            if (roadNames.length >= 2) {
+              summaryRoads = `Via ${roadNames[0]} dan ${roadNames[1]}`;
+            } else if (roadNames.length === 1) {
+              summaryRoads = `Via ${roadNames[0]}`;
+            } else {
+              summaryRoads = `Menuju ${hospital.name}`;
+            }
+
+            const firstStepDist = steps.length > 0 ? Math.round(steps[0].distance) : 200;
+            const nextStepObj = steps.length > 1 ? steps[1] : steps[0];
+            const subStepObj = steps.length > 2 ? steps[2] : null;
+
+            const firstManeuver = parseManeuver(nextStepObj, hospital.name);
+            firstManeuver.distanceMeters = firstStepDist > 0 ? firstStepDist : firstManeuver.distanceMeters;
+
+            const nextManeuver = parseManeuver(subStepObj, hospital.name);
+            nextManeuver.roadText = nextManeuver.roadText.replace(/^ke\s+/i, '');
+
+            setRouteData({
+              distanceMeters: route.distance,
+              durationSeconds: route.duration,
+              coordinates: coords,
+              summaryRoads,
+              firstManeuver,
+              nextManeuver,
+            });
+            setRemainingMeters(route.distance);
+            setTraveledMeters(0);
+            return; // Route successfully updated with real road path
+          }
+        } catch (err) {
+          // Try next endpoint
+        }
+      }
+
+      // Offline fallback: Use precomputed authentic road network for this hospital
+      if (!isCancelled) {
+        const pre = getPrecomputedRoute(hospital.id);
+        const steps = pre.steps || [];
+        const firstStepDist = steps.length > 0 ? Math.round(steps[0].distance) : 200;
+        const nextStepObj = steps.length > 1 ? steps[1] : steps[0];
+        const subStepObj = steps.length > 2 ? steps[2] : null;
+
+        const firstManeuver = parseManeuver(nextStepObj, hospital.name);
+        firstManeuver.distanceMeters = firstStepDist > 0 ? firstStepDist : firstManeuver.distanceMeters;
+
+        const nextManeuver = parseManeuver(subStepObj, hospital.name);
+        nextManeuver.roadText = nextManeuver.roadText.replace(/^ke\s+/i, '');
+
+        setRouteData({
+          distanceMeters: pre.distanceMeters,
+          durationSeconds: pre.durationSeconds,
+          coordinates: pre.coordinates,
+          summaryRoads: pre.summaryRoads ? `Via ${pre.summaryRoads}` : `Menuju ${hospital.name}`,
+          firstManeuver,
+          nextManeuver,
+        });
+        setRemainingMeters(pre.distanceMeters);
+        setTraveledMeters(0);
+      }
+    };
+
+    fetchRoute();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [userCoord.lat, userCoord.lon, hospital]);
+
+  // 3. Live GPS tracking watcher when in 'navigation' mode
+  useEffect(() => {
+    let locationSub: Location.LocationSubscription | null = null;
+    let isCancelled = false;
+
+    if (mode === 'navigation') {
+      const startWatcher = async () => {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') return;
+
+          locationSub = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 1500,
+              distanceInterval: 4,
+            },
+            (loc) => {
+              if (isCancelled) return;
+              const curLat = loc.coords.latitude;
+              const curLon = loc.coords.longitude;
+              const heading =
+                loc.coords.heading && loc.coords.heading > 0
+                  ? loc.coords.heading
+                  : calculateBearing(
+                      currentVehiclePos.lat,
+                      currentVehiclePos.lon,
+                      curLat,
+                      curLon
+                    );
+
+              setCurrentVehiclePos({
+                lat: curLat,
+                lon: curLon,
+                heading,
+              });
+
+              // Send live position update to MapLibre GL in WebView
+              webViewRef.current?.postMessage(
+                JSON.stringify({
+                  type: 'UPDATE_LOCATION',
+                  lat: curLat,
+                  lon: curLon,
+                  heading,
+                })
+              );
+
+              // Update dynamic remaining distance and traveled distance
+              const rem = haversineDistance(
+                curLat,
+                curLon,
+                hospital.coordinates.lat,
+                hospital.coordinates.lon
+              );
+              setRemainingMeters(rem);
+              const traveled = Math.max(0, routeData.distanceMeters - rem);
+              setTraveledMeters(traveled);
+            }
+          );
+        } catch (e) {
+          console.warn('[Navigation] Watcher error:', e);
+        }
+      };
+
+      startWatcher();
+    }
+
+    return () => {
+      isCancelled = true;
+      if (locationSub) {
+        locationSub.remove();
+      }
+    };
+  }, [mode, hospital.coordinates, routeData.distanceMeters]);
+
+  // Top padding for safe area
   const topPadding =
     Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 6;
 
-  // Leaflet map HTML matching the exact visual style in references
+  // Initial vehicle placement in navigation mode aligned with the road direction
+  const initialVehicle = useMemo(() => {
+    if (routeData.coordinates.length >= 2) {
+      const p1 = routeData.coordinates[0];
+      const p2 = routeData.coordinates[1];
+      const heading = calculateBearing(p1[1], p1[0], p2[1], p2[0]);
+      return {
+        lon: p1[0],
+        lat: p1[1],
+        heading,
+      };
+    }
+    return {
+      lon: userCoord.lon,
+      lat: userCoord.lat,
+      heading: 0,
+    };
+  }, [routeData.coordinates, userCoord]);
+
+  // MapLibre GL 3D GIS HTML Template with road-aligned directional arrows
   const mapHtml = useMemo(() => {
     const startLat = userCoord.lat;
     const startLon = userCoord.lon;
     const destLat = hospital.coordinates.lat;
     const destLon = hospital.coordinates.lon;
-
-    // Waypoints simulating realistic city turn: Jl. Bergota -> Jl. Veteran -> Jl. DR. Sutomo
-    const turn1Lat = startLat + (destLat - startLat) * 0.35;
-    const turn1Lon = startLon;
-    const turn2Lat = turn1Lat;
-    const turn2Lon = destLon;
-
-    const routeCoords = [
-      [startLat, startLon],
-      [turn1Lat, turn1Lon],
-      [turn2Lat, turn2Lon],
-      [destLat, destLon],
-    ];
+    const routeCoords = routeData.coordinates;
 
     const isNav = mode === 'navigation';
-    const centerLat = isNav ? turn1Lat : (startLat + destLat) / 2;
-    const centerLon = isNav ? turn1Lon : (startLon + destLon) / 2;
-    const zoomLevel = isNav ? 16 : 15;
+    const vehicleLon = currentVehiclePos.lon || initialVehicle.lon;
+    const vehicleLat = currentVehiclePos.lat || initialVehicle.lat;
+    const vehicleBearing = currentVehiclePos.heading || initialVehicle.heading;
+
+    // Midpoint along route coordinates for ETA pill
+    const midIndex = Math.floor(routeCoords.length / 2);
+    const midCoord = routeCoords[midIndex] || [(startLon + destLon) / 2, (startLat + destLat) / 2];
 
     return `
 <!DOCTYPE html>
@@ -87,12 +460,12 @@ export default function HospitalRouteScreen() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body, html, #map { width: 100%; height: 100%; background: #F1F5F9; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
-    .leaflet-control-attribution, .leaflet-control-zoom { display: none !important; }
+    body, html, #map { width: 100%; height: 100%; overflow: hidden; background: #E2E8F0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-attrib { display: none !important; }
 
     /* Origin Pulse Circle */
     .user-pulse-container {
@@ -109,6 +482,11 @@ export default function HospitalRouteScreen() {
       height: 44px;
       background: rgba(30, 108, 239, 0.22);
       border-radius: 50%;
+      animation: pulse 2s infinite ease-out;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.7); opacity: 0.8; }
+      100% { transform: scale(1.3); opacity: 0; }
     }
     .user-core-dot {
       width: 14px;
@@ -120,45 +498,47 @@ export default function HospitalRouteScreen() {
       z-index: 2;
     }
 
-    /* Navigation Mode Arrow Pointer */
+    /* 3D Navigation Vehicle Arrow */
     .nav-arrow-wrapper {
-      width: 46px;
-      height: 46px;
+      width: 52px;
+      height: 52px;
       position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: transform 0.3s ease-out;
     }
     .nav-arrow-aura {
       position: absolute;
-      width: 46px;
-      height: 46px;
-      background: rgba(30, 108, 239, 0.25);
+      width: 52px;
+      height: 52px;
+      background: rgba(30, 108, 239, 0.28);
       border-radius: 50%;
     }
     .nav-arrow-circle {
-      width: 32px;
-      height: 32px;
+      width: 38px;
+      height: 38px;
       background: #1E6CEF;
       border: 3px solid #FFFFFF;
       border-radius: 50%;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 4px 14px rgba(30, 108, 239, 0.55);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 2;
       color: #FFFFFF;
-      font-size: 13px;
+      font-size: 16px;
+      font-weight: 900;
     }
 
     /* Hospital Destination Ring Pin */
     .dest-pin-ring {
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       background: #FFFFFF;
       border: 5px solid #1E6CEF;
       border-radius: 50%;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     }
 
     /* Callout Pill Labels */
@@ -169,10 +549,10 @@ export default function HospitalRouteScreen() {
       font-size: 12.5px;
       font-weight: 700;
       color: #1E6CEF;
-      box-shadow: 0 3px 10px rgba(0,0,0,0.14);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.18);
       white-space: nowrap;
       display: inline-block;
-      border: 1px solid rgba(0,0,0,0.04);
+      border: 1px solid rgba(0,0,0,0.06);
     }
     .callout-origin {
       color: #1E293B;
@@ -189,101 +569,289 @@ export default function HospitalRouteScreen() {
 <body>
   <div id="map"></div>
   <script>
-    var map = L.map('map', {
-      zoomControl: false,
-      attributionControl: false,
-      dragging: true,
-      touchZoom: true
-    }).setView([${centerLat}, ${centerLon}], ${zoomLevel});
+    var isNav = ${isNav};
+    var startLon = ${startLon};
+    var startLat = ${startLat};
+    var destLon = ${destLon};
+    var destLat = ${destLat};
+    var vehicleLon = ${vehicleLon};
+    var vehicleLat = ${vehicleLat};
+    var vehicleBearing = ${vehicleBearing};
+    var routeCoordinates = ${JSON.stringify(routeCoords)};
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19
-    }).addTo(map);
+    // Compute route bounding box for preview mode
+    var minLon = Math.min(startLon, destLon);
+    var maxLon = Math.max(startLon, destLon);
+    var minLat = Math.min(startLat, destLat);
+    var maxLat = Math.max(startLat, destLat);
 
-    var route = ${JSON.stringify(routeCoords)};
+    routeCoordinates.forEach(function(pt) {
+      if (pt[0] < minLon) minLon = pt[0];
+      if (pt[0] > maxLon) maxLon = pt[0];
+      if (pt[1] < minLat) minLat = pt[1];
+      if (pt[1] > maxLat) maxLat = pt[1];
+    });
 
-    // Outer subtle glow
-    L.polyline(route, {
-      color: '#BFDBFE',
-      weight: 12,
-      opacity: 0.7,
-      lineCap: 'round',
-      lineJoin: 'round'
-    }).addTo(map);
+    // Initialize MapLibre GL 3D Map with glyphs for directional arrows
+    var map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+        sources: {
+          'osm-tiles': {
+            type: 'raster',
+            tiles: [
+              'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+            ],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors'
+          }
+        },
+        layers: [
+          {
+            id: 'osm-tiles-layer',
+            type: 'raster',
+            source: 'osm-tiles',
+            minzoom: 0,
+            maxzoom: 19
+          }
+        ]
+      },
+      center: isNav ? [vehicleLon, vehicleLat] : [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
+      zoom: isNav ? 17.5 : 14.5,
+      pitch: isNav ? 60 : 0, // 3D Camera Tilt in Navigation Mode (ala Google Maps)
+      bearing: isNav ? vehicleBearing : 0, // Heading in driving direction
+      attributionControl: false
+    });
 
-    // Main solid blue route
-    L.polyline(route, {
-      color: '#1E6CEF',
-      weight: 7,
-      opacity: 1,
-      lineCap: 'round',
-      lineJoin: 'round'
-    }).addTo(map);
+    var vehicleMarker = null;
 
-    ${
-      isNav
-        ? `
-      // Navigation vehicle cursor
-      var navIcon = L.divIcon({
-        className: '',
-        html: '<div class="nav-arrow-wrapper"><div class="nav-arrow-aura"></div><div class="nav-arrow-circle">▲</div></div>',
-        iconSize: [46, 46],
-        iconAnchor: [23, 23]
+    map.on('load', function() {
+      // Fit bounds nicely in preview mode
+      if (!isNav) {
+        map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+          padding: { top: 60, bottom: 90, left: 45, right: 45 },
+          maxZoom: 16.5,
+          duration: 0
+        });
+      }
+
+      var routeGeoJSON = {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'LineString',
+          coordinates: routeCoordinates
+        }
+      };
+
+      map.addSource('route-source', {
+        type: 'geojson',
+        data: routeGeoJSON
       });
-      L.marker([${turn1Lat}, ${turn1Lon}], { icon: navIcon }).addTo(map);
-    `
-        : `
-      // User Origin Marker
-      var originIcon = L.divIcon({
-        className: '',
-        html: '<div class="user-pulse-container"><div class="user-pulse-aura"></div><div class="user-core-dot"></div></div>',
-        iconSize: [44, 44],
-        iconAnchor: [22, 22]
-      });
-      L.marker([${startLat}, ${startLon}], { icon: originIcon }).addTo(map);
 
-      // "Lokasi Anda" Pill below origin
-      var originPill = L.divIcon({
-        className: '',
-        html: '<div class="callout-pill callout-origin">Lokasi Anda</div>',
-        iconSize: [100, 28],
-        iconAnchor: [50, -12]
+      // Layer 1: Outer glow polyline along the road
+      map.addLayer({
+        id: 'route-glow',
+        type: 'line',
+        source: 'route-source',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round'
+        },
+        paint: {
+          'line-color': '#93C5FD',
+          'line-width': isNav ? 17 : 14,
+          'line-opacity': 0.7
+        }
       });
-      L.marker([${startLat}, ${startLon}], { icon: originPill }).addTo(map);
 
-      // "5 menit" ETA bubble along the route
-      var etaPill = L.divIcon({
-        className: '',
-        html: '<div class="callout-pill callout-time">5 menit</div>',
-        iconSize: [80, 28],
-        iconAnchor: [40, 14]
+      // Layer 2: Main solid blue road route
+      map.addLayer({
+        id: 'route-line',
+        type: 'line',
+        source: 'route-source',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round'
+        },
+        paint: {
+          'line-color': '#1E6CEF',
+          'line-width': isNav ? 9 : 7.5,
+          'line-opacity': 1
+        }
       });
-      L.marker([${turn1Lat}, ${turn1Lon + (turn2Lon - turn1Lon) * 0.5}], { icon: etaPill }).addTo(map);
-    `
+
+      // Layer 3: Forward directional arrows along the road polyline (ala Google Maps)
+      map.addLayer({
+        id: 'route-arrows',
+        type: 'symbol',
+        source: 'route-source',
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': isNav ? 60 : 75,
+          'text-field': '▶',
+          'text-size': isNav ? 13 : 11,
+          'text-font': ['Open Sans Regular'],
+          'text-keep-upright': false,
+          'text-rotation-alignment': 'map',
+          'text-allow-overlap': true,
+          'text-ignore-placement': true
+        },
+        paint: {
+          'text-color': '#FFFFFF',
+          'text-opacity': 0.95
+        }
+      });
+
+      if (isNav) {
+        // Vehicle Arrow Marker with 3D Navigation Heading
+        var navEl = document.createElement('div');
+        navEl.className = 'nav-arrow-wrapper';
+        navEl.id = 'vehicle-marker';
+        navEl.innerHTML = '<div class="nav-arrow-aura"></div><div class="nav-arrow-circle">▲</div>';
+        vehicleMarker = new maplibregl.Marker({ element: navEl, rotationAlignment: 'map' })
+          .setLngLat([vehicleLon, vehicleLat])
+          .addTo(map);
+      } else {
+        // Origin User Marker
+        var originEl = document.createElement('div');
+        originEl.className = 'user-pulse-container';
+        originEl.innerHTML = '<div class="user-pulse-aura"></div><div class="user-core-dot"></div>';
+        new maplibregl.Marker({ element: originEl })
+          .setLngLat([startLon, startLat])
+          .addTo(map);
+
+        // "Lokasi Anda" Pill Label
+        var originPillEl = document.createElement('div');
+        originPillEl.className = 'callout-pill callout-origin';
+        originPillEl.innerText = 'Lokasi Anda';
+        new maplibregl.Marker({ element: originPillEl, offset: [0, 24] })
+          .setLngLat([startLon, startLat])
+          .addTo(map);
+
+        // ETA Bubble along route
+        var etaPillEl = document.createElement('div');
+        etaPillEl.className = 'callout-pill callout-time';
+        etaPillEl.innerText = ${JSON.stringify(formatDuration(routeData.durationSeconds))};
+        new maplibregl.Marker({ element: etaPillEl })
+          .setLngLat([${midCoord[0]}, ${midCoord[1]}])
+          .addTo(map);
+      }
+
+      // Hospital Destination Ring Pin
+      var destPinEl = document.createElement('div');
+      destPinEl.className = 'dest-pin-ring';
+      new maplibregl.Marker({ element: destPinEl })
+        .setLngLat([destLon, destLat])
+        .addTo(map);
+
+      // Hospital Name Pill Callout
+      var destPillEl = document.createElement('div');
+      destPillEl.className = 'callout-pill';
+      destPillEl.innerText = ${JSON.stringify(hospital.name)};
+      new maplibregl.Marker({ element: destPillEl, offset: [0, -22] })
+        .setLngLat([destLon, destLat])
+        .addTo(map);
+    });
+
+    // Handle React Native messages for live navigation, route update, recenter & compass reset
+    function handleMessage(event) {
+      try {
+        var data = JSON.parse(event.data);
+        if (data.type === 'UPDATE_LOCATION') {
+          if (vehicleMarker) {
+            vehicleMarker.setLngLat([data.lon, data.lat]);
+          }
+          var bearing = typeof data.heading === 'number' && data.heading !== 0 ? data.heading : map.getBearing();
+          map.easeTo({
+            center: [data.lon, data.lat],
+            bearing: bearing,
+            pitch: 60,
+            zoom: 17.5,
+            duration: 800
+          });
+        } else if (data.type === 'UPDATE_ROUTE' && data.coordinates && data.coordinates.length > 0) {
+          routeCoordinates = data.coordinates;
+          if (map.getSource('route-source')) {
+            map.getSource('route-source').setData({
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: routeCoordinates
+              }
+            });
+          }
+        } else if (data.type === 'RECENTER') {
+          if (isNav) {
+            map.easeTo({
+              center: [vehicleLon, vehicleLat],
+              zoom: 17.5,
+              pitch: 60,
+              bearing: vehicleBearing,
+              duration: 800
+            });
+          } else {
+            map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+              padding: { top: 60, bottom: 90, left: 45, right: 45 },
+              duration: 800
+            });
+          }
+        } else if (data.type === 'RESET_NORTH') {
+          map.easeTo({ bearing: 0, duration: 600 });
+        }
+      } catch(e) {}
     }
 
-    // Destination Hospital Ring Pin
-    var destPin = L.divIcon({
-      className: '',
-      html: '<div class="dest-pin-ring"></div>',
-      iconSize: [22, 22],
-      iconAnchor: [11, 11]
-    });
-    L.marker([${destLat}, ${destLon}], { icon: destPin }).addTo(map);
-
-    // "RSUP. Dr Kariadi" Pill label at destination
-    var destPill = L.divIcon({
-      className: '',
-      html: '<div class="callout-pill">${hospital.name}</div>',
-      iconSize: [160, 32],
-      iconAnchor: [-16, 16]
-    });
-    L.marker([${destLat}, ${destLon}], { icon: destPill }).addTo(map);
+    window.addEventListener('message', handleMessage);
+    document.addEventListener('message', handleMessage);
   </script>
 </body>
 </html>
     `;
-  }, [userCoord, hospital, mode]);
+  }, [userCoord, hospital, mode, routeData, currentVehiclePos, initialVehicle]);
+
+  // Recenter trigger
+  const handleRecenter = async () => {
+    setIsLocating(true);
+    const res = await locationService.getCurrentGpsLocation();
+    if (res.success && res.location) {
+      setUserCoord({
+        lat: res.location.lat,
+        lon: res.location.lon,
+        name: res.location.name || 'Lokasi GPS Anda',
+      });
+      setCurrentVehiclePos({
+        lat: res.location.lat,
+        lon: res.location.lon,
+        heading: 0,
+      });
+    }
+    setIsLocating(false);
+
+    if (webViewRef.current) {
+      webViewRef.current.postMessage(JSON.stringify({ type: 'RECENTER' }));
+    }
+  };
+
+  // Reset compass North
+  const handleResetNorth = () => {
+    if (webViewRef.current) {
+      webViewRef.current.postMessage(JSON.stringify({ type: 'RESET_NORTH' }));
+    }
+  };
+
+  // Dynamic values
+  const formattedTotalDist = formatDistance(routeData.distanceMeters);
+  const formattedTotalDuration = formatDuration(routeData.durationSeconds);
+  const formattedEta = formatEtaTime(routeData.durationSeconds);
+
+  const formattedRemainingDist = formatDistance(remainingMeters);
+  const remainingDurationSec = Math.round((remainingMeters / Math.max(1, routeData.distanceMeters)) * routeData.durationSeconds);
+  const formattedRemainingDuration = formatDuration(remainingDurationSec);
+  const progressPercent = Math.min(100, Math.max(5, Math.round((traveledMeters / Math.max(1, routeData.distanceMeters)) * 100)));
 
   return (
     <View style={styles.container}>
@@ -320,9 +888,14 @@ export default function HospitalRouteScreen() {
             {/* Right text fields */}
             <View style={styles.fieldsContainer}>
               <View style={styles.routeFieldBox}>
-                <Text style={styles.originFieldText} numberOfLines={1}>
-                  {userCoord.name}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  {isLocating && (
+                    <ActivityIndicator size="small" color="#1E6CEF" style={{ marginRight: 6 }} />
+                  )}
+                  <Text style={styles.originFieldText} numberOfLines={1}>
+                    {userCoord.name}
+                  </Text>
+                </View>
               </View>
 
               <View style={[styles.routeFieldBox, { marginTop: 10 }]}>
@@ -333,9 +906,10 @@ export default function HospitalRouteScreen() {
             </View>
           </View>
 
-          {/* MAP AREA (Fills available space) */}
+          {/* MAP AREA (Powered by MapLibre GL 3D with Real Road Directions) */}
           <View style={styles.mapArea}>
             <WebView
+              ref={webViewRef}
               originWhitelist={['*']}
               source={{ html: mapHtml }}
               style={styles.mapWebView}
@@ -344,17 +918,18 @@ export default function HospitalRouteScreen() {
             />
 
             {/* Top Right: Compass Button */}
-            <View style={styles.compassButton}>
+            <Pressable style={styles.compassButton} onPress={handleResetNorth}>
               <Ionicons name="navigate-outline" size={18} color="#1E6CEF" />
               <Text style={styles.compassLetter}>U</Text>
-            </View>
+            </Pressable>
 
             {/* Bottom Right: Recenter / Locate Button */}
-            <Pressable
-              style={styles.locateButton}
-              onPress={() => setUserCoord((prev) => ({ ...prev }))}
-            >
-              <Ionicons name="locate" size={22} color="#1E6CEF" />
+            <Pressable style={styles.locateButton} onPress={handleRecenter}>
+              {isLocating ? (
+                <ActivityIndicator size="small" color="#1E6CEF" />
+              ) : (
+                <Ionicons name="locate" size={22} color="#1E6CEF" />
+              )}
             </Pressable>
           </View>
 
@@ -377,17 +952,17 @@ export default function HospitalRouteScreen() {
             {/* Time & Distance Details */}
             <View style={styles.durationRow}>
               <View style={styles.durationLeft}>
-                <Text style={styles.durationMainText}>5 menit</Text>
+                <Text style={styles.durationMainText}>{formattedTotalDuration}</Text>
                 <Text style={styles.durationDistanceText}>
-                  {' '}• {hospital.distance ? hospital.distance.split('–')[0].trim() : '1,2 km'}
+                  {' '}• {formattedTotalDist}
                 </Text>
               </View>
-              <Text style={styles.etaText}>Tiba 09.46</Text>
+              <Text style={styles.etaText}>{formattedEta}</Text>
             </View>
 
             {/* Road Details */}
-            <Text style={styles.routeViaText}>
-              Via Jl. Veteran dan Jl. DR. Sutomo
+            <Text style={styles.routeViaText} numberOfLines={1}>
+              {routeData.summaryRoads}
             </Text>
 
             {/* MULAI NAVIGASI BUTTON (PROMINENT, GUARANTEED VISIBLE) */}
@@ -402,7 +977,7 @@ export default function HospitalRouteScreen() {
         </View>
       ) : (
         /* ============================================================ */
-        /* MODE 2: ACTIVE LIVE NAVIGATION MODE (IMAGE 1)                */
+        /* MODE 2: ACTIVE LIVE NAVIGATION MODE (3D GIS ala Google Maps)  */
         /* ============================================================ */
         <View style={styles.fullscreen}>
           <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
@@ -412,28 +987,46 @@ export default function HospitalRouteScreen() {
             <View style={styles.maneuverRow}>
               {/* Turn Icon Box */}
               <View style={styles.turnIconBox}>
-                <Ionicons name="arrow-undo" size={32} color="#FFFFFF" />
+                <Ionicons
+                  name={routeData.firstManeuver.iconName}
+                  size={32}
+                  color="#FFFFFF"
+                />
               </View>
 
               {/* Turn Instruction Text */}
               <View style={styles.maneuverTextWrapper}>
-                <Text style={styles.distanceBig}>200 m</Text>
-                <Text style={styles.turnActionText}>Belok kiri</Text>
-                <Text style={styles.roadTargetText}>ke Jl. Veteran</Text>
+                <Text style={styles.distanceBig}>
+                  {formatDistance(routeData.firstManeuver.distanceMeters)}
+                </Text>
+                <Text style={styles.turnActionText}>
+                  {routeData.firstManeuver.actionText}
+                </Text>
+                <Text style={styles.roadTargetText} numberOfLines={1}>
+                  {routeData.firstManeuver.roadText}
+                </Text>
               </View>
             </View>
 
             {/* Next Road Preview Row */}
             <View style={styles.nextManeuverRow}>
               <Text style={styles.laluLabel}>Lalu</Text>
-              <Ionicons name="arrow-redo" size={16} color="#FFFFFF" style={{ marginHorizontal: 6 }} />
-              <Text style={styles.nextRoadText}>Jl. DR. Sutomo</Text>
+              <Ionicons
+                name={routeData.nextManeuver.iconName}
+                size={16}
+                color="#FFFFFF"
+                style={{ marginHorizontal: 6 }}
+              />
+              <Text style={styles.nextRoadText} numberOfLines={1}>
+                {routeData.nextManeuver.roadText}
+              </Text>
             </View>
           </View>
 
-          {/* NAVIGATION MAP AREA */}
+          {/* NAVIGATION MAP AREA (3D MapLibre Navigation View) */}
           <View style={styles.mapArea}>
             <WebView
+              ref={webViewRef}
               originWhitelist={['*']}
               source={{ html: mapHtml }}
               style={styles.mapWebView}
@@ -442,10 +1035,10 @@ export default function HospitalRouteScreen() {
             />
 
             {/* Top Right: Compass */}
-            <View style={styles.compassButtonNav}>
+            <Pressable style={styles.compassButtonNav} onPress={handleResetNorth}>
               <Ionicons name="navigate-outline" size={18} color="#1E6CEF" />
               <Text style={styles.compassLetter}>U</Text>
-            </View>
+            </Pressable>
 
             {/* Left Button: Audio Mute / Unmute */}
             <Pressable
@@ -461,14 +1054,13 @@ export default function HospitalRouteScreen() {
 
             {/* Center Bottom: Street Label */}
             <View style={styles.currentStreetPill}>
-              <Text style={styles.currentStreetText}>Menuju Jl. Veteran</Text>
+              <Text style={styles.currentStreetText} numberOfLines={1}>
+                Menuju {routeData.firstManeuver.roadText.replace(/^ke\s+/i, '')}
+              </Text>
             </View>
 
             {/* Right Button: Locate Recenter */}
-            <Pressable
-              style={styles.navLocateButton}
-              onPress={() => setUserCoord((prev) => ({ ...prev }))}
-            >
+            <Pressable style={styles.navLocateButton} onPress={handleRecenter}>
               <Ionicons name="locate" size={22} color="#1E6CEF" />
             </Pressable>
           </View>
@@ -483,8 +1075,10 @@ export default function HospitalRouteScreen() {
             {/* Time, Distance & Close Button Row */}
             <View style={styles.navCardHeader}>
               <View>
-                <Text style={styles.navCardTimeText}>4 menit</Text>
-                <Text style={styles.navCardSubText}>0,9 km lagi • Tiba 09.46</Text>
+                <Text style={styles.navCardTimeText}>{formattedRemainingDuration}</Text>
+                <Text style={styles.navCardSubText}>
+                  {formattedRemainingDist} lagi • {formattedEta}
+                </Text>
               </View>
 
               {/* Close Button: Exit Navigation */}
@@ -499,7 +1093,7 @@ export default function HospitalRouteScreen() {
 
             {/* Progress Bar */}
             <View style={styles.progressTrack}>
-              <View style={styles.progressFill} />
+              <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
             </View>
 
             {/* Hospital Destination Details */}
@@ -508,13 +1102,17 @@ export default function HospitalRouteScreen() {
                 <MaterialCommunityIcons name="hospital-building" size={22} color="#1E6CEF" />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.navHospitalName}>{hospital.name}</Text>
-                <Text style={styles.navHospitalAddress}>{hospital.address}</Text>
+                <Text style={styles.navHospitalName} numberOfLines={1}>
+                  {hospital.name}
+                </Text>
+                <Text style={styles.navHospitalAddress} numberOfLines={1}>
+                  {hospital.address}
+                </Text>
               </View>
             </View>
 
             <Text style={styles.progressSummaryText}>
-              300 m dari 1,2 km telah ditempuh
+              {formatDistance(traveledMeters)} dari {formattedTotalDist} telah ditempuh
             </Text>
           </View>
         </View>
@@ -747,7 +1345,7 @@ const styles = StyleSheet.create({
   },
 
   /* ========================================== */
-  /* LIVE NAVIGATION MODE STYLES                */
+  /* LIVE NAVIGATION MODE STYLES (3D GIS)       */
   /* ========================================== */
   navHeaderBanner: {
     backgroundColor: '#1E6CEF', // Vibrant solid blue banner
@@ -923,7 +1521,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   progressFill: {
-    width: '28%',
     height: '100%',
     backgroundColor: '#1E6CEF',
     borderRadius: 3,
