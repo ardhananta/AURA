@@ -297,14 +297,9 @@ export default function DashboardScreen() {
             </Text>
           </Pressable>
 
-          {/* Mulai Periksa */}
+          {/* Mulai Periksa (Navigasi ke Dokter & Rumah Sakit Mitra) */}
           <Pressable
-            onPress={() =>
-              Alert.alert(
-                'Mulai Periksa',
-                'Mulai konsultasi dan periksa kesehatan dengan dokter spesialis.'
-              )
-            }
+            onPress={() => router.push('/ceksekarang')}
             style={{ alignItems: 'center', flex: 1 }}
           >
             <Image
@@ -766,10 +761,10 @@ export default function DashboardScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 14 }}>
               <Pressable
                 onPress={() =>
-                  Alert.alert(
-                    'Detail Dokter',
-                    'dr. Apung Setiawati\nSpesialisasi: Kedokteran Umum\nRating Kepuasan: 100%'
-                  )
+                  router.push({
+                    pathname: '/doctor-reservation',
+                    params: { doctorId: 'dr-apung' },
+                  })
                 }
                 style={{
                   backgroundColor: '#2563EB',

@@ -1,22 +1,22 @@
 import '@/global.css';
-import React, { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { DefaultTheme, ThemeProvider, Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
-  useFonts,
   PlusJakartaSans_400Regular,
   PlusJakartaSans_500Medium,
   PlusJakartaSans_600SemiBold,
   PlusJakartaSans_700Bold,
   PlusJakartaSans_800ExtraBold,
+  useFonts,
 } from '@expo-google-fonts/plus-jakarta-sans';
+import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import { AuthProvider } from '@/context/auth-context';
 import { AuraColors } from '@/constants/aura-theme';
+import { AuthProvider } from '@/context/auth-context';
 import { applyGlobalFont } from '@/utils/apply-global-font';
 
 SplashScreen.preventAutoHideAsync();
@@ -103,13 +103,10 @@ export default function RootLayout() {
               <Stack.Screen name="dashboard" />
               <Stack.Screen name="pollution-impact" />
               <Stack.Screen name="explore" />
-              <Stack.Screen
-                name="lung-check"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: 350,
-                }}
-              />
+              <Stack.Screen name="ceksekarang" />
+              <Stack.Screen name="doctor-reservation" />
+              <Stack.Screen name="hospital-detail" />
+              <Stack.Screen name="hospital-route" />
             </Stack>
           </View>
         </ThemeProvider>
