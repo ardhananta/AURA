@@ -18,6 +18,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AuraColors } from '@/constants/aura-theme';
 import { AuthProvider } from '@/context/auth-context';
 import { applyGlobalFont } from '@/utils/apply-global-font';
+import { backgroundMobilityTracker } from '@/services/backgroundMobilityTracker';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,6 +44,11 @@ export default function RootLayout() {
     if (fontsLoaded) {
       applyGlobalFont();
       SplashScreen.hideAsync();
+
+      // Mulai pelacakan mobilitas hemat daya di latar belakang secara otomatis
+      backgroundMobilityTracker.startBackgroundTracking().catch((err) => {
+        console.warn('[RootLayout] Background tracking init error:', err);
+      });
     }
   }, [fontsLoaded]);
 
@@ -105,6 +111,13 @@ export default function RootLayout() {
               <Stack.Screen name="explore" />
               <Stack.Screen
                 name="lung-check"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: 350,
+                }}
+              />
+              <Stack.Screen
+                name="skin-check"
                 options={{
                   animation: 'fade_from_bottom',
                   animationDuration: 350,

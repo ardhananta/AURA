@@ -14,6 +14,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HOSPITALS_DATA, HospitalItem } from '@/data/medical-partners';
+import { hospitalService } from '@/services/hospitalService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -22,8 +23,29 @@ export default function HospitalDetailScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ hospitalId?: string }>();
 
-  // Find target hospital or fallback to first
+  // Find target hospital from backend cache or fallback to HOSPITALS_DATA
   const hospital: HospitalItem = useMemo(() => {
+    if (params.hospitalId) {
+      const fromBackend = hospitalService.getCachedHospital(params.hospitalId);
+      if (fromBackend) {
+        return {
+          id: fromBackend.id,
+          name: fromBackend.name,
+          distance: fromBackend.distance_km ? `${fromBackend.distance_km.toFixed(1).replace('.', ',')} km` : '1,2 km',
+          distanceKm: fromBackend.distance_km || 1.2,
+          rating: fromBackend.rating,
+          address: fromBackend.address,
+          openHours: fromBackend.open_hours,
+          description: `Rumah sakit rujukan terakreditasi dengan fasilitas ${fromBackend.facilities.join(', ')}.`,
+          coordinates: {
+            lat: fromBackend.latitude,
+            lon: fromBackend.longitude,
+          },
+          image: fromBackend.image_url ? { uri: fromBackend.image_url } : require('@/assets/dr/hospital_kariadi.jpg'),
+          facilities: fromBackend.facilities.map((f) => ({ icon: 'medical-outline', label: f })),
+        };
+      }
+    }
     const found = HOSPITALS_DATA.find((h) => h.id === params.hospitalId);
     return found || HOSPITALS_DATA[0];
   }, [params.hospitalId]);

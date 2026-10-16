@@ -16,6 +16,7 @@ import * as Location from 'expo-location';
 import { HOSPITALS_DATA, HospitalItem } from '@/data/medical-partners';
 import { getPrecomputedRoute } from '@/data/hospital-routes-precomputed';
 import { locationService } from '@/services/locationService';
+import { hospitalService } from '@/services/hospitalService';
 
 // Haversine formula to compute distance in meters between two lat/lon points
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -141,8 +142,29 @@ export default function HospitalRouteScreen() {
   const webViewRef = useRef<WebView>(null);
   const params = useLocalSearchParams<{ hospitalId?: string }>();
 
-  // Find target hospital or fallback to RSUP Dr Kariadi
+  // Find target hospital from backend cache or fallback to static HOSPITALS_DATA
   const hospital: HospitalItem = useMemo(() => {
+    if (params.hospitalId) {
+      const fromBackend = hospitalService.getCachedHospital(params.hospitalId);
+      if (fromBackend) {
+        return {
+          id: fromBackend.id,
+          name: fromBackend.name,
+          distance: fromBackend.distance_km ? `${fromBackend.distance_km.toFixed(1).replace('.', ',')} km` : '1,2 km',
+          distanceKm: fromBackend.distance_km || 1.2,
+          rating: fromBackend.rating,
+          address: fromBackend.address,
+          openHours: fromBackend.open_hours,
+          description: `Rumah sakit rujukan dengan fasilitas ${fromBackend.facilities.join(', ')}.`,
+          coordinates: {
+            lat: fromBackend.latitude,
+            lon: fromBackend.longitude,
+          },
+          image: fromBackend.image_url ? { uri: fromBackend.image_url } : require('@/assets/dr/hospital_kariadi.jpg'),
+          facilities: fromBackend.facilities.map((f) => ({ icon: 'medical-outline', label: f })),
+        };
+      }
+    }
     const found = HOSPITALS_DATA.find((h) => h.id === params.hospitalId);
     return found || HOSPITALS_DATA[0];
   }, [params.hospitalId]);
@@ -192,31 +214,83 @@ export default function HospitalRouteScreen() {
   const [remainingMeters, setRemainingMeters] = useState(routeData.distanceMeters);
   const [traveledMeters, setTraveledMeters] = useState(0);
 
-  // 1. Fetch real-time user GPS position on mount
+  // 1. Fetch real-time user GPS position on mount (Instant Two-Phase: lastKnown -> fresh GPS)
   useEffect(() => {
     let isMounted = true;
     const loadGps = async () => {
-      setIsLocating(true);
-      const res = await locationService.getCurrentGpsLocation();
-      if (isMounted && res.success && res.location) {
-        setUserCoord({
-          lat: res.location.lat,
-          lon: res.location.lon,
-          name: res.location.name || 'Lokasi GPS Anda',
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          if (isMounted) {
+            setUserCoord((prev) => ({ ...prev, name: 'Lokasi Anda (Semarang)' }));
+            setIsLocating(false);
+          }
+          return;
+        }
+
+        // Phase 1: INSTANT Last Known Position (0-20ms) - eliminates endless loading
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (isMounted && lastKnown) {
+          setUserCoord({
+            lat: lastKnown.coords.latitude,
+            lon: lastKnown.coords.longitude,
+            name: 'Lokasi Anda',
+          });
+          setCurrentVehiclePos({
+            lat: lastKnown.coords.latitude,
+            lon: lastKnown.coords.longitude,
+            heading: lastKnown.coords.heading || 0,
+          });
+        }
+
+        // Phase 2: Fresh GPS position with timeout (max 3.5s)
+        const freshPosPromise = Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
         });
-        setCurrentVehiclePos({
-          lat: res.location.lat,
-          lon: res.location.lon,
-          heading: 0,
-        });
-      } else if (isMounted) {
-        setUserCoord((prev) => ({
-          ...prev,
-          name: 'Randusari, Semarang Selatan',
-        }));
+        const timeoutPromise = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), 3500)
+        );
+        const loc = await Promise.race([freshPosPromise, timeoutPromise]);
+
+        if (isMounted && loc) {
+          setUserCoord((prev) => ({
+            ...prev,
+            lat: loc.coords.latitude,
+            lon: loc.coords.longitude,
+          }));
+          setCurrentVehiclePos((prev) => ({
+            ...prev,
+            lat: loc.coords.latitude,
+            lon: loc.coords.longitude,
+            heading: loc.coords.heading || prev.heading,
+          }));
+
+          // Background reverse geocode (does not block GPS or map!)
+          Location.reverseGeocodeAsync({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          })
+            .then((rev) => {
+              if (isMounted && rev && rev.length > 0) {
+                const item = rev[0];
+                const parts = [
+                  item.street || item.district || item.subregion,
+                  item.city || item.region,
+                ].filter(Boolean);
+                if (parts.length > 0) {
+                  setUserCoord((prev) => ({ ...prev, name: parts.join(', ') }));
+                }
+              }
+            })
+            .catch(() => {});
+        }
+      } catch (err) {
+        console.warn('[HospitalRoute] GPS error:', err);
+      } finally {
+        if (isMounted) setIsLocating(false);
       }
-      if (isMounted) setIsLocating(false);
     };
+
     loadGps();
 
     return () => {
@@ -224,7 +298,7 @@ export default function HospitalRouteScreen() {
     };
   }, []);
 
-  // 2. Fetch real street-following routing from OpenStreetMap routing engine
+  // 2. Fetch real street routing: First from Backend Golang API, then fallback to OSM / precomputed
   useEffect(() => {
     let isCancelled = false;
 
@@ -234,8 +308,56 @@ export default function HospitalRouteScreen() {
       const destLat = hospital.coordinates.lat;
       const destLon = hospital.coordinates.lon;
 
-      // Primary: High-performance OSM routed-car server (< 1s response)
-      // Secondary: OSRM router mirror
+      // 1. Primary: Golang Backend Route API
+      try {
+        const backendRoute = await hospitalService.getRoute(startLat, startLon, destLat, destLon);
+        if (backendRoute && backendRoute.coordinates?.length >= 2 && !isCancelled) {
+          const steps = backendRoute.steps || [];
+          const coords = backendRoute.coordinates;
+          const roadNames: string[] = Array.from(
+            new Set(
+              steps
+                .map((s) => s.name?.trim())
+                .filter((n) => n && n.length > 0)
+            )
+          );
+
+          let summaryRoads = 'Rute tercepat';
+          if (roadNames.length >= 2) {
+            summaryRoads = `Via ${roadNames[0]} dan ${roadNames[1]}`;
+          } else if (roadNames.length === 1) {
+            summaryRoads = `Via ${roadNames[0]}`;
+          } else {
+            summaryRoads = `Menuju ${hospital.name}`;
+          }
+
+          const firstStepDist = steps.length > 0 ? Math.round(steps[0].distance) : 200;
+          const nextStepObj = steps.length > 1 ? steps[1] : steps[0];
+          const subStepObj = steps.length > 2 ? steps[2] : null;
+
+          const firstManeuver = parseManeuver(nextStepObj, hospital.name);
+          firstManeuver.distanceMeters = firstStepDist > 0 ? firstStepDist : firstManeuver.distanceMeters;
+
+          const nextManeuver = parseManeuver(subStepObj, hospital.name);
+          nextManeuver.roadText = nextManeuver.roadText.replace(/^ke\s+/i, '');
+
+          setRouteData({
+            distanceMeters: backendRoute.distance_meters,
+            durationSeconds: backendRoute.duration_seconds,
+            coordinates: coords,
+            summaryRoads,
+            firstManeuver,
+            nextManeuver,
+          });
+          setRemainingMeters(backendRoute.distance_meters);
+          setTraveledMeters(0);
+          return; // Successfully loaded from backend!
+        }
+      } catch (err) {
+        // Fallback to OSM / Precomputed
+      }
+
+      // 2. Secondary fallback: High-performance OSM routed-car server (< 1s response)
       const endpoints = [
         `https://routing.openstreetmap.de/routed-car/route/v1/driving/${startLon},${startLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`,
         `https://router.project-osrm.org/route/v1/driving/${startLon},${startLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`,
@@ -260,7 +382,6 @@ export default function HospitalRouteScreen() {
 
             if (coords.length < 2) continue;
 
-            // Extract unique road names
             const roadNames: string[] = Array.from(
               new Set(
                 steps
@@ -298,14 +419,14 @@ export default function HospitalRouteScreen() {
             });
             setRemainingMeters(route.distance);
             setTraveledMeters(0);
-            return; // Route successfully updated with real road path
+            return;
           }
         } catch (err) {
           // Try next endpoint
         }
       }
 
-      // Offline fallback: Use precomputed authentic road network for this hospital
+      // 3. Offline fallback: Use precomputed authentic road network for this hospital
       if (!isCancelled) {
         const pre = getPrecomputedRoute(hospital.id);
         const steps = pre.steps || [];
@@ -816,20 +937,28 @@ export default function HospitalRouteScreen() {
   // Recenter trigger
   const handleRecenter = async () => {
     setIsLocating(true);
-    const res = await locationService.getCurrentGpsLocation();
-    if (res.success && res.location) {
-      setUserCoord({
-        lat: res.location.lat,
-        lon: res.location.lon,
-        name: res.location.name || 'Lokasi GPS Anda',
+    try {
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
       });
-      setCurrentVehiclePos({
-        lat: res.location.lat,
-        lon: res.location.lon,
-        heading: 0,
-      });
+      if (loc) {
+        setUserCoord((prev) => ({
+          ...prev,
+          lat: loc.coords.latitude,
+          lon: loc.coords.longitude,
+        }));
+        setCurrentVehiclePos((prev) => ({
+          ...prev,
+          lat: loc.coords.latitude,
+          lon: loc.coords.longitude,
+          heading: loc.coords.heading || prev.heading,
+        }));
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      setIsLocating(false);
     }
-    setIsLocating(false);
 
     if (webViewRef.current) {
       webViewRef.current.postMessage(JSON.stringify({ type: 'RECENTER' }));

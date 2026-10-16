@@ -27,14 +27,24 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  setAudioModeAsync,
+  requestRecordingPermissionsAsync,
+} from 'expo-audio';
+import { aiService } from '@/services/aiService';
+import { CoughPredictionResponse, CoughMobilityContext } from '@/types/ai';
+import { useAuth } from '@/context/auth-context';
+import { backgroundMobilityTracker } from '@/services/backgroundMobilityTracker';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MIC_WIDTH = Math.min(SCREEN_WIDTH * 0.52, 220);
 const MIC_HEIGHT = MIC_WIDTH * (465 / 266); // preserve original SVG aspect ratio (266 x 465)
 
-type DetectionState = 'idle' | 'listening' | 'analyzing' | 'result';
+type DetectionState = 'idle' | 'listening' | 'analyzing' | 'result' | 'error';
 
-// ─── Microphone Icon (from assets/images/mic.svg) ────────────────────
+// ─── Microphone Icon (exact asset preserved) ─────────────────────────
 const MicrophoneIcon: React.FC<{ width: number; height: number }> = ({
   width,
   height,
@@ -83,7 +93,7 @@ const MicrophoneIcon: React.FC<{ width: number; height: number }> = ({
     <Rect x="99.208" y="183.146" width="161.841" height="6.61016" transform="rotate(-44.5186 99.208 183.146)" fill="#2373F4" />
     <Rect x="133.07" y="182.843" width="113.787" height="6.61016" transform="rotate(-44.5186 133.07 182.843)" fill="#2373F4" />
     <Rect x="159.851" y="191.35" width="78.676" height="6.61016" transform="rotate(-44.5186 159.851 191.35)" fill="#2373F4" />
-    {/* Mic body outline (thick) */}
+    {/* Mic body outline */}
     <Path
       d="M71.8979 330.278C45.795 308.899 45.7929 262.8 46.4798 228.059C45.564 198.663 47.9277 91.132 48.5383 80.4055C49.2228 68.3795 58.835 2.73894 134.404 3.57406C194.852 4.24209 209.737 48.3409 216.149 69.72C219.583 91.7672 217.522 157.241 217.524 235.408C217.526 315.758 187.3 336.959 172.188 344.976C130.973 363.683 86.5522 343.64 71.8979 330.278Z"
       stroke="white"
@@ -95,50 +105,37 @@ const MicrophoneIcon: React.FC<{ width: number; height: number }> = ({
       d="M62.8884 430.986C64.1028 427.948 67.045 425.955 70.317 425.955H193.308C196.285 425.955 199.017 427.609 200.397 430.248L211.407 451.302C214.18 456.602 210.366 462.959 204.385 463.009L61.494 464.195C55.807 464.243 51.8882 458.507 53.999 453.226L62.8884 430.986Z"
       fill="white"
     />
-    {/* Lower body details */}
-    <Rect x="83.2881" y="220.38" width="99.1524" height="18.5085" rx="8" fill="#F2F2F2" />
-    <Rect x="83.2881" y="250.786" width="99.1524" height="31.7288" rx="8" fill="#F2F2F2" />
-    <Path
-      d="M182.441 273.922C182.441 291.81 154.542 313.583 131.542 313.583C108.543 313.583 83.2881 289.827 83.2881 271.939C83.2881 254.05 108.543 253.43 131.542 253.43C154.542 253.43 182.441 256.033 182.441 273.922Z"
-      fill="#F2F2F2"
-    />
   </Svg>
 );
 
-// ─── Sound Wave Icon (from assets/images/sound.svg) ──────────────────
+// ─── Sound Wave SVG Asset (exact from reference) ──────────────────────
 const SoundWaveIcon: React.FC<{ width: number; height: number }> = ({
   width,
   height,
 }) => (
   <Svg width={width} height={height} viewBox="0 0 68 93" fill="none">
     <Path
-      d="M42.2084 4.91951C29.4934 13.3483 5.57288 40.5321 11.6108 81.8366"
-      stroke="#FFB433"
-      strokeWidth="4"
+      d="M3.19727 67.5508C15.9082 56.671 18.0694 40.5977 7.02539 25.1094"
+      stroke="white"
+      strokeWidth="5.5"
       strokeLinecap="round"
     />
     <Path
-      d="M47.7085 17.58C38.0901 23.956 19.9951 44.5195 24.5625 75.7647"
-      stroke="#FFB433"
-      strokeWidth="4"
+      d="M24.2827 79.5244C44.7578 61.6441 46.9081 33.3276 28.1108 13.125"
+      stroke="white"
+      strokeWidth="5.5"
       strokeLinecap="round"
     />
     <Path
-      d="M52.2402 31.513C46.1377 35.5583 34.6573 48.6049 37.5551 68.4286"
-      stroke="#FFB433"
-      strokeWidth="4"
-      strokeLinecap="round"
-    />
-    <Path
-      d="M56.3027 42.8225C53.4317 45.021 47.9188 51.9426 48.8348 62.0413"
-      stroke="#FFB433"
-      strokeWidth="4"
+      d="M45.3677 90.0717C73.6069 66.6163 75.7463 26.057 49.1958 3.14062"
+      stroke="white"
+      strokeWidth="5.5"
       strokeLinecap="round"
     />
   </Svg>
 );
 
-// ─── Animated Dual Sound Waves (Left & Right) ────────────────────────
+// ─── Animated Dual Sound Waves ────────────────────────────────────────
 const AnimatedSoundWaves: React.FC<{ isActive: boolean }> = ({ isActive }) => {
   const waveAnim = useSharedValue(0);
 
@@ -199,12 +196,10 @@ const AnimatedSoundWaves: React.FC<{ isActive: boolean }> = ({ isActive }) => {
 
   return (
     <>
-      {/* Right Sound Wave */}
       <Animated.View style={[styles.rightWavePos, rightWaveStyle]}>
         <SoundWaveIcon width={WAVE_WIDTH} height={WAVE_HEIGHT} />
       </Animated.View>
 
-      {/* Left Sound Wave (Mirrored) */}
       <Animated.View style={[styles.leftWavePos, leftWaveStyle]}>
         <SoundWaveIcon width={WAVE_WIDTH} height={WAVE_HEIGHT} />
       </Animated.View>
@@ -212,7 +207,7 @@ const AnimatedSoundWaves: React.FC<{ isActive: boolean }> = ({ isActive }) => {
   );
 };
 
-// ─── Individual Pulsing Dot (Clean Hook usage) ───────────────────────
+// ─── Individual Pulsing Dot ──────────────────────────────────────────
 const PulsingDot: React.FC<{ delay: number }> = ({ delay }) => {
   const progress = useSharedValue(0.2);
 
@@ -248,7 +243,6 @@ const PulsingDot: React.FC<{ delay: number }> = ({ delay }) => {
   return <Animated.View style={[styles.dot, dotStyle]} />;
 };
 
-// ─── Pulsing Dots Container ──────────────────────────────────────────
 const PulsingDots: React.FC = () => (
   <View style={styles.dotsRow}>
     <PulsingDot delay={0} />
@@ -257,12 +251,11 @@ const PulsingDots: React.FC = () => (
   </View>
 );
 
-// ─── Result Card ─────────────────────────────────────────────────────
+// ─── Result Card with ONNX ICBHI & Pollution Correlation ───────────
 const ResultCard: React.FC<{
-  status: 'healthy' | 'moderate' | 'warning';
-  score: number;
-  message: string;
-}> = ({ status, score, message }) => {
+  result: CoughPredictionResponse;
+  onConsult: () => void;
+}> = ({ result, onConsult }) => {
   const slideY = useSharedValue(40);
   const opacity = useSharedValue(0);
 
@@ -276,32 +269,67 @@ const ResultCard: React.FC<{
     transform: [{ translateY: slideY.value }],
   }));
 
-  const color =
-    status === 'healthy'
-      ? '#10B981'
-      : status === 'moderate'
-      ? '#F59E0B'
-      : '#EF4444';
-  const icon =
-    status === 'healthy'
-      ? 'checkmark-circle'
-      : status === 'moderate'
-      ? 'alert-circle'
-      : 'warning';
-  const label =
-    status === 'healthy'
-      ? 'Sehat'
-      : status === 'moderate'
-      ? 'Cukup Baik'
-      : 'Perlu Perhatian';
+  const isHealthy = result.status === 'healthy' || result.prediction === 'Normal';
+  const isModerate = result.status === 'moderate' || result.severity === 'moderate';
+  const color = isHealthy ? '#10B981' : isModerate ? '#F59E0B' : '#EF4444';
+  const icon = isHealthy ? 'checkmark-circle' : isModerate ? 'alert-circle' : 'warning';
+  const label = isHealthy ? 'Normal' : result.prediction || (isModerate ? 'Cukup Baik' : 'Perlu Perhatian');
 
   return (
     <Animated.View style={[styles.resultCard, cardStyle]}>
-      <Ionicons name={icon as any} size={58} color={color} />
-      <Text style={styles.resultScore}>{score}%</Text>
+      {/* ONNX AI Badge */}
+      <View style={styles.modelBadgeWrap}>
+        <Ionicons name="sparkles" size={12} color="#2373F4" />
+        <Text style={styles.modelBadgeText}>
+          ONNX ICBHI AI • {result.confidence != null ? `${result.confidence.toFixed(1)}% Keyakinan` : 'Teranalisis'}
+        </Text>
+      </View>
+
+      <Ionicons name={icon as any} size={46} color={color} style={{ marginTop: 6 }} />
+      {result.health_score != null && (
+        <Text style={styles.resultScore}>{result.health_score}%</Text>
+      )}
       <Text style={[styles.resultLabel, { color }]}>{label}</Text>
       <View style={[styles.resultDivider, { backgroundColor: color + '30' }]} />
-      <Text style={styles.resultMessage}>{message}</Text>
+      {result.clinical_interpretation ? (
+        <Text style={styles.resultMessage}>{result.clinical_interpretation}</Text>
+      ) : null}
+
+      {/* Environmental Correlation Box */}
+      {result.environmental_correlation && (
+        <View style={styles.correlationBox}>
+          <View style={styles.correlationHeader}>
+            <Ionicons name="leaf" size={13} color="#059669" />
+            <Text style={styles.correlationTitle}>Korelasi Paparan Polusi:</Text>
+          </View>
+          <Text style={styles.correlationNotes} numberOfLines={3}>
+            {result.environmental_correlation.clinical_correlation_notes ||
+              `Paparan outdoor: ${result.environmental_correlation.total_outdoor_minutes ?? 0} mnt${
+                result.environmental_correlation.average_outdoor_pm25 != null
+                  ? `, PM2.5: ${result.environmental_correlation.average_outdoor_pm25} µg/m³`
+                  : ''
+              }`}
+          </Text>
+        </View>
+      )}
+
+      {/* Probability Pills */}
+      {result.all_probabilities && (
+        <View style={styles.metricsPillsRow}>
+          {Object.entries(result.all_probabilities).slice(0, 3).map(([key, val]) => (
+            <View key={key} style={styles.metricPill}>
+              <Text style={styles.metricPillLabel} numberOfLines={1}>{key}</Text>
+              <Text style={styles.metricPillVal}>{val}%</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Consult Doctor CTA */}
+      <Pressable onPress={onConsult} style={styles.consultCardBtn}>
+        <Ionicons name="chatbubbles" size={16} color="#2373F4" style={{ marginRight: 6 }} />
+        <Text style={styles.consultCardBtnText}>Konsultasi Dokter</Text>
+      </Pressable>
     </Animated.View>
   );
 };
@@ -312,17 +340,16 @@ const ResultCard: React.FC<{
 export default function LungCheckScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const [state, setState] = useState<DetectionState>('idle');
   const [timer, setTimer] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [resultData, setResultData] = useState<{
-    status: 'healthy' | 'moderate' | 'warning';
-    score: number;
-    message: string;
-  } | null>(null);
+  const [recordedUri, setRecordedUri] = useState<string | null>(null);
+  const [resultData, setResultData] = useState<CoughPredictionResponse | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Safe navigation back
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -331,7 +358,7 @@ export default function LungCheckScreen() {
     }
   };
 
-  // ── Mic pulse animation ──
+  // Mic pulse animation
   const micScale = useSharedValue(1);
 
   useEffect(() => {
@@ -344,44 +371,32 @@ export default function LungCheckScreen() {
         -1,
         true
       );
-    } else if (state === 'analyzing') {
-      micScale.value = withRepeat(
-        withSequence(
-          withTiming(1.05, { duration: 450 }),
-          withTiming(0.95, { duration: 450 })
-        ),
-        -1,
-        true
-      );
     } else {
       cancelAnimation(micScale);
-      micScale.value = withSpring(1, { damping: 14 });
+      micScale.value = withTiming(1, { duration: 250 });
     }
+    return () => cancelAnimation(micScale);
   }, [state]);
 
   const micAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: micScale.value }],
   }));
 
-  // ── Button press animation ──
+  // Button micro-interaction
   const btnScale = useSharedValue(1);
   const btnAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: btnScale.value }],
   }));
 
-  // ── Timer in listening state ──
+  // Timer counter for 5s recording
   useEffect(() => {
     if (state === 'listening') {
       setTimer(0);
       timerRef.current = setInterval(() => {
-        setTimer((p) => {
-          if (p >= 5) return p;
-          return p + 1;
-        });
+        setTimer((t) => t + 1);
       }, 1000);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -391,82 +406,179 @@ export default function LungCheckScreen() {
   // Transition from listening to analyzing after 5s
   useEffect(() => {
     if (state === 'listening' && timer >= 5) {
-      setState('analyzing');
+      handleStop();
     }
   }, [timer, state]);
 
-  // Transition from analyzing to result after 2.5s
+  // Process audio with ONNX ICBHI model (TANPA DUMMY DATA)
   useEffect(() => {
     if (state !== 'analyzing') return;
-    const t = setTimeout(() => {
-      const score = Math.floor(Math.random() * 25) + 75; // 75 - 99%
-      const status: 'healthy' | 'moderate' | 'warning' =
-        score >= 85 ? 'healthy' : score >= 75 ? 'moderate' : 'warning';
-      const message =
-        status === 'healthy'
-          ? 'Paru-paru Anda dalam kondisi prima! Pola pernapasan jernih dan kapasitas paru normal.'
-          : status === 'moderate'
-          ? 'Kondisi paru-paru terdeteksi cukup baik. Kurangi paparan polusi dan perbanyak minum air hangat.'
-          : 'Pola batuk menunjukkan adanya sedikit iritasi saluran pernapasan. Istirahat yang cukup dan konsultasi ke dokter bila berlanjut.';
-      setResultData({ status, score, message });
-      setState('result');
-    }, 2500);
-    return () => clearTimeout(t);
+
+    let isMounted = true;
+    const processCoughAudio = async () => {
+      try {
+        if (audioRecorder.isRecording) {
+          await audioRecorder.stop();
+        }
+      } catch {
+        // ignore
+      }
+
+      const uri = audioRecorder.uri || recordedUri;
+      if (!uri) {
+        if (isMounted) {
+          setErrorMessage('File audio rekaman batuk tidak ditemukan. Silakan tekan tombol Mulai dan batuk ke arah mikrofon.');
+          setState('error');
+        }
+        return;
+      }
+
+      // Ambil data mobilitas real dari background tracker pengguna (tanpa data palsu)
+      const waypoints = backgroundMobilityTracker.getCollectedWaypoints();
+      let totalOutdoor = 0;
+      waypoints.forEach((wp) => {
+        if (wp.classification === 'outdoor') {
+          totalOutdoor += wp.duration_minutes;
+        }
+      });
+
+      const mobilityContext: CoughMobilityContext = {
+        outdoorMinutes: totalOutdoor > 0 ? totalOutdoor : undefined,
+        usia: user?.usia,
+      };
+
+      try {
+        const response = await aiService.predictCough(uri, mobilityContext);
+        if (isMounted) {
+          setResultData(response);
+          setState('result');
+        }
+      } catch (err: any) {
+        console.error('[CoughCheck] AI prediction failed:', err);
+        if (isMounted) {
+          setErrorMessage(
+            err?.message ||
+              'Tidak dapat terhubung ke server ONNX ICBHI (http://localhost:8000). Pastikan backend onnxaura sudah berjalan.'
+          );
+          setState('error');
+        }
+      }
+    };
+
+    processCoughAudio();
+
+    return () => {
+      isMounted = false;
+    };
   }, [state]);
 
-  const handleStart = () => {
+  const handleStart = async () => {
     btnScale.value = withSequence(
       withTiming(0.93, { duration: 100 }),
       withSpring(1, { damping: 12, stiffness: 220 })
     );
-    setState('listening');
+
+    try {
+      const perm = await requestRecordingPermissionsAsync();
+      if (perm.granted) {
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+        });
+        await audioRecorder.prepareToRecordAsync();
+        audioRecorder.record();
+        setState('listening');
+      } else {
+        setErrorMessage('Izin rekaman mikrofon ditolak. Silakan izinkan akses mikrofon di pengaturan perangkat Anda.');
+        setState('error');
+      }
+    } catch (err: any) {
+      console.warn('[CoughCheck] Record start error:', err);
+      setErrorMessage('Gagal mengaktifkan mikrofon: ' + (err?.message || 'Error'));
+      setState('error');
+    }
   };
 
-  const handleStop = () => setState('analyzing');
+  const handleStop = async () => {
+    try {
+      if (audioRecorder.isRecording) {
+        await audioRecorder.stop();
+        setRecordedUri(audioRecorder.uri);
+      }
+    } catch (err) {
+      console.warn('[CoughCheck] Record stop error:', err);
+    }
+    setState('analyzing');
+  };
 
   const handleRetry = () => {
     setResultData(null);
+    setRecordedUri(null);
+    setErrorMessage(null);
     setState('idle');
   };
 
   return (
     <View style={styles.root}>
-      {/* Background Gradient matching reference */}
+      {/* Background Gradient — explicit absoluteFill guarantees it NEVER collapses to white */}
       <LinearGradient
         colors={['#57B9F8', '#40A3F5', '#2B80F4', '#1B65DD']}
         locations={[0, 0.25, 0.65, 1]}
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Back button */}
-      <Pressable
-        style={[styles.backBtn, { top: insets.top + 12 }]}
-        onPress={handleBack}
-        hitSlop={14}
-      >
-        <Ionicons name="arrow-back" size={24} color="white" />
-      </Pressable>
+      {/* ─── 1. TOP NAVIGATION & BALANCED CENTERED SWITCHER BAR ─── */}
+      <View style={[styles.topNavBar, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          style={styles.backBtn}
+          onPress={handleBack}
+          hitSlop={12}
+          accessibilityLabel="Kembali"
+        >
+          <Ionicons name="arrow-back" size={22} color="white" />
+        </Pressable>
 
-      {/* Top Header / Title */}
-      <View style={[styles.titleWrap, { paddingTop: insets.top + 50 }]}>
+        {/* Centered Segmented Switcher */}
+        <View style={styles.segmentedControl}>
+          <View style={[styles.segmentOption, styles.segmentOptionActive]}>
+            <Ionicons name="mic" size={14} color="#2373F4" style={{ marginRight: 4 }} />
+            <Text style={styles.segmentTextActive}>Deteksi Batuk</Text>
+          </View>
+
+          <Pressable
+            style={styles.segmentOption}
+            onPress={() => router.replace('/skin-check')}
+          >
+            <Ionicons name="scan-outline" size={14} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
+            <Text style={styles.segmentTextInactive}>Scan Kulit</Text>
+          </Pressable>
+        </View>
+
+        {/* Right Balancer Spacer (matches backBtn width for true centering) */}
+        <View style={styles.backBtnSpacer} />
+      </View>
+
+      {/* ─── 2. TITLE & SUBTITLE ─── */}
+      <View style={styles.titleWrap}>
         <Text style={styles.title}>
-          {state === 'idle' && 'Deteksi Kesehatan Paru'}
-          {state === 'listening' && 'Mendengarkan...'}
-          {state === 'analyzing' && 'Menganalisis...'}
-          {state === 'result' && 'Hasil Deteksi Paru'}
+          {state === 'idle' && 'Deteksi Batuk'}
+          {state === 'listening' && 'Mendengarkan Batuk...'}
+          {state === 'analyzing' && 'Menganalisis Suara Batuk...'}
+          {state === 'result' && 'Hasil Analisis Batuk'}
+          {state === 'error' && 'Analisis Batuk Gagal'}
         </Text>
-        {state !== 'result' && (
+        {state !== 'result' && state !== 'error' && (
           <Text style={styles.subtitle}>
-            {state === 'idle' && 'Batukkan ke mikrofon untuk analisis kesehatan paru-paru Anda'}
+            {state === 'idle' && 'Batukkan ke mikrofon untuk analisis suara batuk Anda'}
             {state === 'listening' &&
               `Silakan batuk ke arah mikrofon (${timer}/5 detik)`}
-            {state === 'analyzing' && 'Memproses frekuensi & data suara batuk...'}
+            {state === 'analyzing' && 'Model ONNX ICBHI sedang memproses pola audio batuk...'}
           </Text>
         )}
       </View>
 
-      {/* Center Interactive Microphone Area */}
-      {state !== 'result' ? (
+      {/* ─── 3. CENTER INTERACTIVE MICROPHONE AREA ─── */}
+      {state === 'idle' || state === 'listening' || state === 'analyzing' ? (
         <View style={styles.centerArea}>
           <Animated.View style={micAnimStyle}>
             <View style={styles.micContainer}>
@@ -480,19 +592,28 @@ export default function LungCheckScreen() {
 
           {state === 'analyzing' && <PulsingDots />}
         </View>
-      ) : (
+      ) : state === 'result' && resultData ? (
         <View style={styles.centerArea}>
-          {resultData && (
-            <ResultCard
-              status={resultData.status}
-              score={resultData.score}
-              message={resultData.message}
-            />
-          )}
+          <ResultCard
+            result={resultData}
+            onConsult={() => router.push('/ceksekarang')}
+          />
         </View>
-      )}
+      ) : state === 'error' ? (
+        <View style={styles.centerArea}>
+          <View style={styles.errorCard}>
+            <Ionicons name="alert-circle" size={54} color="#EF4444" />
+            <Text style={styles.errorTitle}>Koneksi Server AI Gagal</Text>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+            <Pressable style={styles.retryActionBtn} onPress={handleRetry}>
+              <Ionicons name="refresh" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={styles.retryActionBtnText}>Coba Lagi</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
-      {/* Bottom Button Bar */}
+      {/* ─── 4. BOTTOM BUTTON BAR ─── */}
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 36 }]}>
         {state === 'idle' && (
           <Animated.View style={[styles.startBtnWrap, btnAnimStyle]}>
@@ -509,7 +630,7 @@ export default function LungCheckScreen() {
           </Pressable>
         )}
 
-        {state === 'result' && (
+        {(state === 'result' || state === 'error') && (
           <View style={styles.resultBtns}>
             <Pressable style={styles.retryBtn} onPress={handleRetry}>
               <Ionicons name="refresh" size={18} color="#2373F4" />
@@ -526,24 +647,71 @@ export default function LungCheckScreen() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// ─── STYLES (Rock-solid, beautiful layout matching design mockup) ────
+// ═════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  root: {
+    flex: 1,
+    backgroundColor: '#1E6FE3', // Fallback color so screen is NEVER white
+  },
 
-  backBtn: {
-    position: 'absolute',
-    left: 20,
+  /* Top Navigation Bar with True Center Alignment */
+  topNavBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
     zIndex: 25,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  backBtnSpacer: {
+    width: 40,
+    height: 40,
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    borderRadius: 999,
+    padding: 3,
+    alignItems: 'center',
+  },
+  segmentOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  segmentOptionActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  segmentTextActive: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2373F4',
+  },
+  segmentTextInactive: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 
   titleWrap: {
     alignItems: 'center',
     paddingHorizontal: 28,
+    marginTop: 14,
   },
   title: {
     fontSize: 24,
@@ -553,11 +721,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13.5,
     color: 'rgba(255,255,255,0.85)',
     textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 20,
+    marginTop: 6,
+    lineHeight: 19,
     maxWidth: 320,
   },
 
@@ -603,10 +771,10 @@ const styles = StyleSheet.create({
   resultCard: {
     backgroundColor: '#ffffff',
     borderRadius: 28,
-    paddingVertical: 36,
-    paddingHorizontal: 28,
+    paddingVertical: 32,
+    paddingHorizontal: 24,
     alignItems: 'center',
-    width: '86%',
+    width: '88%',
     maxWidth: 340,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 12 },
@@ -618,7 +786,7 @@ const styles = StyleSheet.create({
     fontSize: 54,
     fontWeight: '800',
     color: '#1E293B',
-    marginTop: 10,
+    marginTop: 8,
     letterSpacing: -1,
   },
   resultLabel: {
@@ -630,13 +798,137 @@ const styles = StyleSheet.create({
     width: '55%',
     height: 3,
     borderRadius: 2,
-    marginVertical: 16,
+    marginVertical: 14,
   },
   resultMessage: {
-    fontSize: 14,
+    fontSize: 13.5,
     color: '#64748B',
     textAlign: 'center',
-    lineHeight: 21,
+    lineHeight: 19,
+  },
+
+  metricsPillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+    width: '100%',
+    justifyContent: 'center',
+  },
+  metricPill: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  metricPillLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  metricPillVal: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  modelBadgeWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginBottom: 4,
+  },
+  modelBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  correlationBox: {
+    width: '100%',
+    backgroundColor: '#F0FDF4',
+    borderRadius: 14,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
+  },
+  correlationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
+  },
+  correlationTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  correlationNotes: {
+    fontSize: 10.5,
+    color: '#166534',
+    lineHeight: 15,
+  },
+  consultCardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#EFF6FF',
+  },
+  consultCardBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2373F4',
+  },
+  errorCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    width: '90%',
+    maxWidth: 340,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1E293B',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 12.5,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  retryActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2373F4',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 999,
+    marginTop: 18,
+  },
+  retryActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
 
   /* Bottom buttons */

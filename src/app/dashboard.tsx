@@ -267,7 +267,7 @@ export default function DashboardScreen() {
                 lineHeight: 16,
               }}
             >
-              Cek Kesehatan{'\n'}Paru
+              Deteksi{'\n'}Batuk
             </Text>
           </Pressable>
 
@@ -702,6 +702,74 @@ export default function DashboardScreen() {
             </Pressable>
           </LinearGradient>
         </View>
+
+        {/* 4.5 FEATURE BANNER: SCAN KESEHATAN KULIT */}
+        <Pressable
+          onPress={() => router.push('/skin-check')}
+          style={{
+            marginHorizontal: 16,
+            marginTop: 14,
+            borderRadius: 16,
+            overflow: 'hidden',
+            backgroundColor: '#2563EB',
+            shadowColor: '#2563EB',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.18,
+            shadowRadius: 10,
+            elevation: 4,
+          }}
+        >
+          <LinearGradient
+            colors={['#38BDF8', '#2563EB', '#1D4ED8']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              padding: 14,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
+              <View
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 14,
+                  backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 12,
+                }}
+              >
+                <Ionicons name="scan" size={24} color="#FFFFFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 13.5 }}>
+                  Scan Kesehatan Kulit
+                </Text>
+                <Text style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: 11, marginTop: 2, lineHeight: 15 }}>
+                  Deteksi iritasi & barier kulit akibat polusi via foto
+                </Text>
+              </View>
+            </View>
+
+            <View
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: 999,
+                paddingHorizontal: 16,
+                paddingVertical: 7,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: 0.1,
+                elevation: 2,
+              }}
+            >
+              <Text style={{ color: '#2563EB', fontWeight: '700', fontSize: 12 }}>Pindai</Text>
+            </View>
+          </LinearGradient>
+        </Pressable>
 
         {/* 5. DOCTOR RECOMMENDATION CARD (drbunga.png) - Doctor image over the top of card */}
         <View
