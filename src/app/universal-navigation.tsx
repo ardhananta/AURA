@@ -1,13 +1,14 @@
 /**
  * Universal Navigation Screen
  * Navigate to any destination with turn-by-turn directions, GPS guidance, and health warnings.
- * Free mapping: OpenStreetMap / native MapKit without Google Maps API key.
+ * Free mapping: OpenStreetMap + MapLibre WebView (no Google Maps API key / never black screen)
+ * Road dataset: Powered by extracted Semarang GeoPackage (semarang.gpkg -> 11,800+ roads & POIs).
  */
 
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -21,52 +22,61 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  OsmMapView,
+  OsmMapViewHandle,
+  OsmMarkerItem,
+  OsmPolylineItem,
+} from '@/components/map/OsmMapView';
 import { navigationService } from '@/services/navigationService';
+import {
+  findNearestSemarangRoad,
+  haversineMeters,
+  highwayTypeLabel,
+  searchSemarangRoads,
+} from '@/services/semarangRoadService';
 import { useNavigationStore } from '@/stores/navigationStore';
 import { HealthWarning, MapMarker, RouteStep } from '@/types/navigation';
 
-const POPULAR_SEMARANG_POIS = [
-  { name: 'RSUP Dr. Kariadi', lat: -7.0015, lon: 110.4128 },
-  { name: 'Simpang Lima Semarang', lat: -6.9904, lon: 110.4227 },
-  { name: 'Lawang Sewu', lat: -6.9839, lon: 110.4104 },
-  { name: 'Stadion Jatidiri', lat: -7.0210, lon: 110.4074 },
-  { name: 'Kelenteng Sam Poo Kong', lat: -6.9965, lon: 110.3985 },
-  { name: 'Kota Lama Semarang', lat: -6.9682, lon: 110.4281 },
-  { name: 'Bandara Ahmad Yani', lat: -6.9749, lon: 110.3789 },
-];
-
-function calculateHaversineDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371e3;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+interface SearchDestinationItem {
+  name: string;
+  subtitle?: string;
+  lat: number;
+  lon: number;
+  source?: 'gpkg' | 'osm';
 }
+
+const POPULAR_SEMARANG_POIS: SearchDestinationItem[] = [
+  { name: 'RSUP Dr. Kariadi', subtitle: 'Rumah Sakit • Semarang Selatan', lat: -7.0015, lon: 110.4128, source: 'gpkg' },
+  { name: 'Simpang Lima Semarang', subtitle: 'Pusat Kota • Semarang Tengah', lat: -6.9904, lon: 110.4227, source: 'gpkg' },
+  { name: 'Lawang Sewu', subtitle: 'Landmark • Tugu Muda', lat: -6.9839, lon: 110.4104, source: 'gpkg' },
+  { name: 'Stadion Jatidiri', subtitle: 'Olahraga • Gajahmungkur', lat: -7.021, lon: 110.4074, source: 'gpkg' },
+  { name: 'Kelenteng Sam Poo Kong', subtitle: 'Wisata • Semarang Barat', lat: -6.9965, lon: 110.3985, source: 'gpkg' },
+  { name: 'Kota Lama Semarang', subtitle: 'Kawasan Bersejarah • Semarang Utara', lat: -6.9682, lon: 110.4281, source: 'gpkg' },
+  { name: 'Bandara Ahmad Yani', subtitle: 'Bandara • Semarang Barat', lat: -6.9749, lon: 110.3789, source: 'gpkg' },
+];
 
 export default function UniversalNavigationScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{
+    destLat?: string;
+    destLon?: string;
+    destName?: string;
+  }>();
+
   const navigationStore = useNavigationStore();
-  const mapViewRef = useRef<MapView>(null);
+  const mapViewRef = useRef<OsmMapViewHandle>(null);
   const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
+  const initialParamHandledRef = useRef(false);
 
   // UI State
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
-  const [geocodedResults, setGeocodedResults] = useState<Array<{ name: string; lat: number; lon: number }>>([]);
+  const [osmResults, setOsmResults] = useState<SearchDestinationItem[]>([]);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number }>({
     latitude: -6.9932,
     longitude: 110.4203,
@@ -75,6 +85,15 @@ export default function UniversalNavigationScreen() {
   const [selectedWarning, setSelectedWarning] = useState<HealthWarning | null>(null);
   const [showWarningDetail, setShowWarningDetail] = useState(false);
   const [showAllStepsModal, setShowAllStepsModal] = useState(false);
+  const [destinationLabel, setDestinationLabel] = useState<string>('Tujuan Anda');
+
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/dashboard');
+    }
+  };
 
   // Fetch initial user location on mount
   useEffect(() => {
@@ -82,11 +101,15 @@ export default function UniversalNavigationScreen() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLocation({
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          const nextPos = {
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
-          });
+          };
+          setUserLocation(nextPos);
+          mapViewRef.current?.flyTo(nextPos.latitude, nextPos.longitude, 14);
         }
       } catch (err) {
         console.warn('[UniversalNav] Location permission note:', err);
@@ -101,58 +124,154 @@ export default function UniversalNavigationScreen() {
     };
   }, []);
 
-  // Filter static POIs matching search
-  const filteredPois = useMemo(() => {
-    if (!searchQuery.trim()) return POPULAR_SEMARANG_POIS;
-    return POPULAR_SEMARANG_POIS.filter((poi) =>
-      poi.name.toLowerCase().includes(searchQuery.toLowerCase())
+  // Offline matches from extracted semarang.gpkg roads & POIs
+  const localRoadSuggestions = useMemo<SearchDestinationItem[]>(() => {
+    const q = searchQuery.trim();
+    if (!q) return POPULAR_SEMARANG_POIS;
+
+    const matchedPois = POPULAR_SEMARANG_POIS.filter((poi) =>
+      poi.name.toLowerCase().includes(q.toLowerCase())
     );
+    const roadMatches = searchSemarangRoads(q, 14).map((r) => ({
+      name: r.n,
+      subtitle: `${highwayTypeLabel(r.h)} • Data Jalan Semarang`,
+      lat: r.lat,
+      lon: r.lon,
+      source: 'gpkg' as const,
+    }));
+
+    const seenNames = new Set(matchedPois.map((p) => p.name.toLowerCase()));
+    const combined = [...matchedPois];
+    for (const road of roadMatches) {
+      if (!seenNames.has(road.name.toLowerCase())) {
+        seenNames.add(road.name.toLowerCase());
+        combined.push(road);
+      }
+    }
+    return combined;
   }, [searchQuery]);
 
-  // Combined suggestions: local matches + geocoded addresses
+  // Combined suggestions: offline Semarang GPKG roads + optional Nominatim OSM matches
   const allSuggestions = useMemo(() => {
-    if (geocodedResults.length > 0) {
-      return [...geocodedResults, ...filteredPois];
-    }
-    return filteredPois;
-  }, [geocodedResults, filteredPois]);
+    if (osmResults.length === 0) return localRoadSuggestions;
+    const seen = new Set(localRoadSuggestions.map((x) => x.name.toLowerCase()));
+    const extra = osmResults.filter((r) => !seen.has(r.name.toLowerCase()));
+    return [...localRoadSuggestions, ...extra];
+  }, [localRoadSuggestions, osmResults]);
 
-  // Handle Geocoding Search for user typed queries (Universal)
+  // Nearest Semarang street to user's current coordinate
+  const currentRoad = useMemo(
+    () => findNearestSemarangRoad(userLocation.latitude, userLocation.longitude),
+    [userLocation.latitude, userLocation.longitude]
+  );
+
+  // Free OpenStreetMap Nominatim lookup when user presses Search (never uses Google Geocoder)
   const handlePerformSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const q = searchQuery.trim();
+    if (!q) return;
 
     setIsGeocoding(true);
     setShowSearchSuggestions(true);
     try {
-      // 1. Try search with Semarang context
-      const queryWithCity = searchQuery.includes('Semarang')
-        ? searchQuery
-        : `${searchQuery}, Semarang, Jawa Tengah`;
+      const searchStr = q.toLowerCase().includes('semarang')
+        ? q
+        : `${q}, Semarang`;
+      const url = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=id&limit=6&q=${encodeURIComponent(
+        searchStr
+      )}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'AURA-HealthNav/1.0',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
 
-      let results = await Location.geocodeAsync(queryWithCity);
-
-      // 2. Fallback to direct query if no results
-      if (!results || results.length === 0) {
-        results = await Location.geocodeAsync(searchQuery);
-      }
-
-      if (results && results.length > 0) {
-        const mapped = results.slice(0, 5).map((r, i) => ({
-          name: `${searchQuery.trim()} #${i + 1}`,
-          lat: r.latitude,
-          lon: r.longitude,
-        }));
-        setGeocodedResults(mapped);
-      } else {
-        setGeocodedResults([]);
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json)) {
+          const mapped: SearchDestinationItem[] = json
+            .map((item: any) => ({
+              name: String(item.display_name || q).split(',')[0].trim(),
+              subtitle: String(item.display_name || 'OpenStreetMap').slice(0, 65),
+              lat: parseFloat(item.lat),
+              lon: parseFloat(item.lon),
+              source: 'osm' as const,
+            }))
+            .filter((x) => !isNaN(x.lat) && !isNaN(x.lon));
+          setOsmResults(mapped);
+        }
       }
     } catch (err) {
-      console.warn('[UniversalNav] Geocoding error:', err);
-      setGeocodedResults([]);
+      console.warn('[UniversalNav] Nominatim search skipped, using offline Semarang road data:', err);
+      setOsmResults([]);
     } finally {
       setIsGeocoding(false);
     }
   };
+
+  // Handle route calculation
+  const handleCalculateRoute = useCallback(
+    async (destination: { name: string; lat: number; lon: number }) => {
+      setIsLoading(true);
+      setShowSearchSuggestions(false);
+      setSearchQuery('');
+      setOsmResults([]);
+      setDestinationLabel(destination.name);
+
+      try {
+        const route = await navigationService.calculateRoute(
+          { latitude: userLocation.latitude, longitude: userLocation.longitude },
+          { latitude: destination.lat, longitude: destination.lon }
+        );
+
+        if (!route || !Array.isArray(route.coordinates) || route.coordinates.length < 2) {
+          Alert.alert('Rute Tidak Ditemukan', 'Tidak dapat menghitung rute ke tujuan ini.');
+          return;
+        }
+
+        navigationStore.setRoute(route);
+        navigationStore.startNavigation();
+
+        const routePts = route.coordinates.map(([lon, lat]) => ({
+          latitude: lat,
+          longitude: lon,
+        }));
+        mapViewRef.current?.fitBounds(routePts, 80);
+      } catch (err: any) {
+        Alert.alert(
+          'Gagal Menghitung Rute',
+          err?.message || 'Periksa koneksi internet Anda atau coba tujuan di area Semarang.'
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [navigationStore, userLocation.latitude, userLocation.longitude]
+  );
+
+  // Auto-trigger route if navigated with explicit destination query params
+  useEffect(() => {
+    if (initialParamHandledRef.current) return;
+    if (params.destLat && params.destLon) {
+      const lat = parseFloat(params.destLat);
+      const lon = parseFloat(params.destLon);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        initialParamHandledRef.current = true;
+        const timer = setTimeout(() => {
+          void handleCalculateRoute({
+            name: params.destName || 'Tujuan Terpilih',
+            lat,
+            lon,
+          });
+        }, 0);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [params.destLat, params.destLon, params.destName, handleCalculateRoute]);
 
   // Turn-by-Turn GPS Watcher during active navigation
   useEffect(() => {
@@ -182,7 +301,6 @@ export default function UniversalNavigationScreen() {
             };
             setUserLocation(currentPos);
 
-            // Update user position in store
             navigationStore.updatePosition({
               latitude: loc.coords.latitude,
               longitude: loc.coords.longitude,
@@ -191,19 +309,17 @@ export default function UniversalNavigationScreen() {
               timestamp: Date.now(),
             });
 
-            // Check distance to current step's end location
             const steps = navigationStore.activeRoute?.steps;
             const stepIdx = navigationStore.currentStepIndex;
             if (steps && steps[stepIdx]) {
-              const currentStep = steps[stepIdx];
-              const distToEnd = calculateHaversineDistance(
+              const step = steps[stepIdx];
+              const distToEnd = haversineMeters(
                 loc.coords.latitude,
                 loc.coords.longitude,
-                currentStep.end_location.latitude,
-                currentStep.end_location.longitude
+                step.end_location.latitude,
+                step.end_location.longitude
               );
 
-              // Auto-advance to next step when within 30 meters
               if (distToEnd <= 30 && stepIdx < steps.length - 1) {
                 navigationStore.updateCurrentStep(stepIdx + 1);
               }
@@ -221,54 +337,8 @@ export default function UniversalNavigationScreen() {
         locationWatcherRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationStore.isNavigating, navigationStore.activeRoute?.route_id]);
-
-  // Handle route calculation
-  const handleCalculateRoute = async (destination: { name: string; lat: number; lon: number }) => {
-    setIsLoading(true);
-    setShowSearchSuggestions(false);
-    setSearchQuery('');
-    setGeocodedResults([]);
-
-    try {
-      const route = await navigationService.calculateRoute(
-        { latitude: userLocation.latitude, longitude: userLocation.longitude },
-        { latitude: destination.lat, longitude: destination.lon }
-      );
-
-      if (!route || !Array.isArray(route.coordinates) || route.coordinates.length < 2) {
-        Alert.alert('Rute Tidak Ditemukan', 'Tidak dapat menghitung rute ke tujuan ini.');
-        return;
-      }
-
-      navigationStore.setRoute(route);
-      navigationStore.startNavigation();
-
-      // Fit map camera on route
-      if (mapViewRef.current && route.coordinates.length >= 2) {
-        const [minLon, minLat] = route.coordinates.reduce(
-          ([minL, minLa], [l, la]) => [Math.min(minL, l), Math.min(minLa, la)],
-          [route.coordinates[0][0], route.coordinates[0][1]]
-        );
-        const [maxLon, maxLat] = route.coordinates.reduce(
-          ([maxL, maxLa], [l, la]) => [Math.max(maxL, l), Math.max(maxLa, la)],
-          [route.coordinates[0][0], route.coordinates[0][1]]
-        );
-
-        mapViewRef.current.fitToCoordinates(
-          [
-            { latitude: minLat, longitude: minLon },
-            { latitude: maxLat, longitude: maxLon },
-          ],
-          { edgePadding: { top: 120, right: 40, bottom: 220, left: 40 }, animated: true }
-        );
-      }
-    } catch (err: any) {
-      Alert.alert('Gagal Menghitung Rute', err?.message || 'Periksa koneksi internet Anda.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleStopNavigation = () => {
     Alert.alert('Akhiri Navigasi', 'Apakah Anda ingin mengakhiri sesi navigasi rute ini?', [
@@ -288,12 +358,14 @@ export default function UniversalNavigationScreen() {
   };
 
   const isNavigating = navigationStore.isNavigating && !!navigationStore.activeRoute;
-  const currentStep = isNavigating && navigationStore.activeRoute?.steps
-    ? navigationStore.activeRoute.steps[navigationStore.currentStepIndex]
-    : null;
+  const currentStep =
+    isNavigating && navigationStore.activeRoute?.steps
+      ? navigationStore.activeRoute.steps[navigationStore.currentStepIndex]
+      : null;
   const totalSteps = navigationStore.activeRoute?.steps?.length || 0;
 
-  const topPadding = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 8;
+  const topPadding =
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 8;
 
   const getManeuverIcon = (maneuver?: RouteStep['maneuver']) => {
     switch (maneuver) {
@@ -312,95 +384,86 @@ export default function UniversalNavigationScreen() {
     }
   };
 
+  // Map overlays passed to OSM WebView MapLibre renderer
+  const mapPolylines = useMemo<OsmPolylineItem[]>(() => {
+    if (
+      !isNavigating ||
+      !Array.isArray(navigationStore.activeRoute?.coordinates) ||
+      navigationStore.activeRoute!.coordinates.length < 2
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: navigationStore.activeRoute!.route_id || 'active-route',
+        color: '#1E6CEF',
+        width: 6,
+        coordinates: navigationStore.activeRoute!.coordinates.map(([lon, lat]) => ({
+          latitude: lat,
+          longitude: lon,
+        })),
+      },
+    ];
+  }, [isNavigating, navigationStore.activeRoute]);
+
+  const mapMarkers = useMemo<OsmMarkerItem[]>(() => {
+    if (!isNavigating || !navigationStore.activeRoute) return [];
+    const list: OsmMarkerItem[] = [];
+    const coords = navigationStore.activeRoute.coordinates;
+    if (Array.isArray(coords) && coords.length > 0) {
+      const last = coords[coords.length - 1];
+      list.push({
+        id: 'destination-pin',
+        latitude: last[1],
+        longitude: last[0],
+        title: destinationLabel,
+        color: '#EF4444',
+        variant: 'pin',
+      });
+    }
+    if (Array.isArray(navigationStore.mapMarkers)) {
+      navigationStore.mapMarkers.forEach((m: MapMarker) => {
+        list.push({
+          id: m.marker_id,
+          latitude: m.location.latitude,
+          longitude: m.location.longitude,
+          title: m.title,
+          color: m.color || '#F59E0B',
+          variant: 'alert',
+        });
+      });
+    }
+    return list;
+  }, [isNavigating, navigationStore.activeRoute, navigationStore.mapMarkers, destinationLabel]);
+
+  const handleMarkerPress = (markerId: string) => {
+    const markerObj = navigationStore.mapMarkers?.find((m) => m.marker_id === markerId);
+    if (!markerObj) return;
+    const warning = navigationStore.healthWarnings?.find(
+      (w) => w.warning_id === markerId || w.title === markerObj.title
+    );
+    if (warning) {
+      setSelectedWarning(warning);
+      setShowWarningDetail(true);
+    }
+  };
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+    <View style={{ flex: 1, backgroundColor: '#E2E8F0' }}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      {/* Map View without Google Maps API key */}
-      <MapView
+      {/* OpenStreetMap / MapLibre GL Map (Zero Google Maps API key / Never Black) */}
+      <OsmMapView
         ref={mapViewRef}
         style={{ flex: 1 }}
-        initialRegion={{
-          latitude: userLocation.latitude,
-          longitude: userLocation.longitude,
-          latitudeDelta: 0.04,
-          longitudeDelta: 0.04,
-        }}
-        showsUserLocation
-        showsMyLocationButton={false}
-      >
-        {/* OpenStreetMap Tile Layer for free raster map */}
-        <UrlTile
-          urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maximumZ={19}
-          flipY={false}
-          zIndex={-1}
-        />
-
-        {/* Route Polyline (Null-safe array check) */}
-        {isNavigating &&
-          Array.isArray(navigationStore.activeRoute?.coordinates) &&
-          navigationStore.activeRoute.coordinates.length > 1 && (
-            <Polyline
-              coordinates={navigationStore.activeRoute.coordinates.map(([lon, lat]: [number, number]) => ({
-                latitude: lat,
-                longitude: lon,
-              }))}
-              strokeColor="#1E6CEF"
-              strokeWidth={5}
-            />
-          )}
-
-        {/* Destination Marker */}
-        {isNavigating &&
-          Array.isArray(navigationStore.activeRoute?.coordinates) &&
-          navigationStore.activeRoute.coordinates.length > 0 && (
-            <Marker
-              coordinate={{
-                latitude: navigationStore.activeRoute.coordinates[navigationStore.activeRoute.coordinates.length - 1][1],
-                longitude: navigationStore.activeRoute.coordinates[navigationStore.activeRoute.coordinates.length - 1][0],
-              }}
-              title="Tujuan Anda"
-            >
-              <View style={{ alignItems: 'center' }}>
-                <Ionicons name="location" size={36} color="#EF4444" />
-              </View>
-            </Marker>
-          )}
-
-        {/* Health / Traffic Markers */}
-        {isNavigating &&
-          Array.isArray(navigationStore.mapMarkers) &&
-          navigationStore.mapMarkers.map((marker: MapMarker) => (
-            <Marker
-              key={marker.marker_id}
-              coordinate={{
-                latitude: marker.location.latitude,
-                longitude: marker.location.longitude,
-              }}
-              title={marker.title}
-            >
-              <View
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  backgroundColor: marker.color || '#EF4444',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 2,
-                  borderColor: '#FFFFFF',
-                  shadowColor: '#000',
-                  shadowOpacity: 0.25,
-                  shadowRadius: 3,
-                  elevation: 4,
-                }}
-              >
-                <Ionicons name={(marker.icon as any) || 'warning'} size={20} color="#FFFFFF" />
-              </View>
-            </Marker>
-          ))}
-      </MapView>
+        initialCenter={userLocation}
+        initialZoom={14}
+        userLocation={userLocation}
+        followUserLocation={isNavigating}
+        polylines={mapPolylines}
+        markers={mapMarkers}
+        onMarkerPress={handleMarkerPress}
+      />
 
       {/* Top Bar: Search Bar / Navigation Header */}
       {!isNavigating ? (
@@ -432,7 +495,7 @@ export default function UniversalNavigationScreen() {
             }}
           >
             <Pressable
-              onPress={() => router.back()}
+              onPress={handleBack}
               hitSlop={8}
               style={{ paddingRight: 6 }}
             >
@@ -446,7 +509,7 @@ export default function UniversalNavigationScreen() {
                 color: '#1E293B',
                 paddingVertical: 2,
               }}
-              placeholder="Cari lokasi tujuan di Semarang..."
+              placeholder="Cari nama jalan / tujuan Semarang (GPKG)..."
               placeholderTextColor="#94A3B8"
               value={searchQuery}
               onChangeText={(text) => {
@@ -470,7 +533,7 @@ export default function UniversalNavigationScreen() {
               <Pressable
                 onPress={() => {
                   setSearchQuery('');
-                  setGeocodedResults([]);
+                  setOsmResults([]);
                 }}
                 hitSlop={8}
               >
@@ -479,14 +542,37 @@ export default function UniversalNavigationScreen() {
             )}
           </View>
 
-          {/* Search Suggestions Dropdown */}
+          {/* Current Semarang Road Context Chip */}
+          {!showSearchSuggestions && currentRoad && (
+            <View
+              style={{
+                marginTop: 8,
+                alignSelf: 'flex-start',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: 'rgba(255,255,255,0.94)',
+                borderRadius: 999,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderWidth: 1,
+                borderColor: '#E2E8F0',
+              }}
+            >
+              <Ionicons name="compass" size={14} color="#1E6CEF" style={{ marginRight: 6 }} />
+              <Text style={{ fontSize: 11.5, fontWeight: '700', color: '#0F172A' }}>
+                Dekat {currentRoad.n}
+              </Text>
+            </View>
+          )}
+
+          {/* Search Suggestions Dropdown (Offline Semarang GPKG Roads + POIs + OSM) */}
           {showSearchSuggestions && allSuggestions.length > 0 && (
             <View
               style={{
                 marginTop: 8,
                 backgroundColor: '#FFFFFF',
                 borderRadius: 16,
-                maxHeight: 260,
+                maxHeight: 280,
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 4 },
                 shadowOpacity: 0.15,
@@ -505,8 +591,8 @@ export default function UniversalNavigationScreen() {
                     onPress={() => handleCalculateRoute(item)}
                     style={({ pressed }) => [
                       {
-                        paddingVertical: 12,
-                        paddingHorizontal: 16,
+                        paddingVertical: 11,
+                        paddingHorizontal: 14,
                         borderBottomWidth: 1,
                         borderBottomColor: '#F1F5F9',
                         flexDirection: 'row',
@@ -515,16 +601,21 @@ export default function UniversalNavigationScreen() {
                       },
                     ]}
                   >
-                    <Ionicons name="location-outline" size={18} color="#1E6CEF" style={{ marginRight: 10 }} />
+                    <Ionicons
+                      name={item.source === 'osm' ? 'globe-outline' : 'navigate-circle-outline'}
+                      size={18}
+                      color="#1E6CEF"
+                      style={{ marginRight: 10 }}
+                    />
                     <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 13, color: '#1E293B', fontWeight: '600' }}>
+                      <Text style={{ fontSize: 13, color: '#1E293B', fontWeight: '700' }}>
                         {item.name}
                       </Text>
-                      <Text style={{ fontSize: 11, color: '#64748B' }}>
-                        {item.lat.toFixed(4)}, {item.lon.toFixed(4)}
+                      <Text style={{ fontSize: 11, color: '#64748B' }} numberOfLines={1}>
+                        {item.subtitle || `${item.lat.toFixed(4)}, ${item.lon.toFixed(4)}`}
                       </Text>
                     </View>
-                    <Ionicons name="navigate-outline" size={16} color="#94A3B8" />
+                    <Ionicons name="arrow-forward" size={16} color="#94A3B8" />
                   </Pressable>
                 )}
                 keyExtractor={(item, index) => `${item.name}-${index}`}
@@ -578,7 +669,6 @@ export default function UniversalNavigationScreen() {
                 </View>
               </View>
 
-              {/* Step Navigation Controls (Prev / Next & Overview) */}
               <View
                 style={{
                   flexDirection: 'row',
@@ -625,6 +715,29 @@ export default function UniversalNavigationScreen() {
         </View>
       )}
 
+      {/* Recenter GPS Floating Button */}
+      <Pressable
+        onPress={() => mapViewRef.current?.flyTo(userLocation.latitude, userLocation.longitude, 15)}
+        style={{
+          position: 'absolute',
+          right: 16,
+          bottom: isNavigating ? insets.bottom + 110 : insets.bottom + 24,
+          width: 46,
+          height: 46,
+          borderRadius: 23,
+          backgroundColor: '#FFFFFF',
+          alignItems: 'center',
+          justifyContent: 'center',
+          shadowColor: '#000',
+          shadowOpacity: 0.18,
+          shadowRadius: 6,
+          elevation: 4,
+          zIndex: 95,
+        }}
+      >
+        <Ionicons name="locate" size={22} color="#1E6CEF" />
+      </Pressable>
+
       {/* Bottom Floating Bar during Navigation */}
       {isNavigating && (
         <View
@@ -636,7 +749,6 @@ export default function UniversalNavigationScreen() {
             zIndex: 90,
           }}
         >
-          {/* Health Warnings Carousel if any */}
           {Array.isArray(navigationStore.healthWarnings) && navigationStore.healthWarnings.length > 0 && (
             <ScrollView
               horizontal
@@ -665,13 +777,14 @@ export default function UniversalNavigationScreen() {
                   }}
                 >
                   <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B' }}>{warning.title}</Text>
-                  <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }} numberOfLines={1}>{warning.message}</Text>
+                  <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }} numberOfLines={1}>
+                    {warning.message}
+                  </Text>
                 </Pressable>
               ))}
             </ScrollView>
           )}
 
-          {/* Route Summary & Stop Navigation Button */}
           <View
             style={{
               backgroundColor: '#FFFFFF',
@@ -688,9 +801,10 @@ export default function UniversalNavigationScreen() {
             }}
           >
             <View>
-              <Text style={{ fontSize: 12, color: '#64748B' }}>Total Rute</Text>
+              <Text style={{ fontSize: 12, color: '#64748B' }}>Total Rute ke {destinationLabel}</Text>
               <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E293B' }}>
-                {((navigationStore.activeRoute?.distance_meters || 0) / 1000).toFixed(1)} km • {Math.round((navigationStore.activeRoute?.duration_seconds || 0) / 60)} menit
+                {((navigationStore.activeRoute?.distance_meters || 0) / 1000).toFixed(1)} km •{' '}
+                {Math.round((navigationStore.activeRoute?.duration_seconds || 0) / 60)} menit
               </Text>
             </View>
 

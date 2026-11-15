@@ -17,11 +17,18 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Circle, Marker, Polyline, UrlTile } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  OsmCircleItem,
+  OsmMapView,
+  OsmMapViewHandle,
+  OsmMarkerItem,
+  OsmPolylineItem,
+} from '@/components/map/OsmMapView';
 import { useAuth } from '@/context/auth-context';
 import { navigationService } from '@/services/navigationService';
+import { findNearestSemarangRoad } from '@/services/semarangRoadService';
 import { DailyHistoryResponse } from '@/types/tracking';
 
 /**
@@ -38,7 +45,7 @@ export default function DailyJourneyScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const mapViewRef = useRef<MapView>(null);
+  const mapViewRef = useRef<OsmMapViewHandle>(null);
 
   // State
   const [selectedDate, setSelectedDate] = useState<string>(() => getLocalDateString());
@@ -79,7 +86,10 @@ export default function DailyJourneyScreen() {
     };
   }, [selectedDate, user?.uid]);
 
-  const waypoints = history?.combined_waypoints || [];
+  const waypoints = useMemo(
+    () => history?.combined_waypoints || [],
+    [history?.combined_waypoints]
+  );
   const currentWaypoint = waypoints[currentWaypointIndex];
 
   // Map bounding box
@@ -118,14 +128,52 @@ export default function DailyJourneyScreen() {
   // Animate map camera to current waypoint during playback
   useEffect(() => {
     if (currentWaypoint && isPlaying && mapViewRef.current) {
-      mapViewRef.current.animateToRegion({
+      mapViewRef.current.flyTo(currentWaypoint.latitude, currentWaypoint.longitude, 15);
+    }
+  }, [currentWaypoint, isPlaying]);
+
+  const journeyPolylines = useMemo<OsmPolylineItem[]>(() => {
+    if (waypoints.length < 2) return [];
+    return [
+      {
+        id: 'journey-path',
+        color: '#2563EB',
+        width: 4,
+        coordinates: waypoints.map((wp) => ({
+          latitude: wp.latitude,
+          longitude: wp.longitude,
+        })),
+      },
+    ];
+  }, [waypoints]);
+
+  const journeyCircles = useMemo<OsmCircleItem[]>(() => {
+    return waypoints.map((wp, idx) => ({
+      id: `wp-${idx}`,
+      latitude: wp.latitude,
+      longitude: wp.longitude,
+      color: wp.classification === 'indoor' ? '#F59E0B' : '#10B981',
+      strokeColor: '#FFFFFF',
+    }));
+  }, [waypoints]);
+
+  const replayMarkers = useMemo<OsmMarkerItem[]>(() => {
+    if (!currentWaypoint) return [];
+    const date = currentWaypoint.timestamp ? new Date(currentWaypoint.timestamp) : null;
+    const badgeText = date
+      ? date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    return [
+      {
+        id: 'replay-cursor',
         latitude: currentWaypoint.latitude,
         longitude: currentWaypoint.longitude,
-        latitudeDelta: 0.015,
-        longitudeDelta: 0.015,
-      }, 300);
-    }
-  }, [currentWaypointIndex, isPlaying]);
+        color: '#EF4444',
+        badgeText,
+        variant: 'replay',
+      },
+    ];
+  }, [currentWaypoint]);
 
   const topPadding = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 8;
 
@@ -279,97 +327,32 @@ export default function DailyJourneyScreen() {
         </View>
       ) : (
         <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-          {/* Map Section */}
+          {/* Map Section (OpenStreetMap WebView - No Google Maps SDK / Never Black) */}
           {mapBounds && (
-            <View style={{ height: 280, width: '100%' }}>
-              <MapView
+            <View style={{ height: 280, width: '100%', backgroundColor: '#E2E8F0' }}>
+              <OsmMapView
                 ref={mapViewRef}
                 style={{ flex: 1 }}
-                initialRegion={{
+                initialCenter={{
                   latitude: (mapBounds.minLat + mapBounds.maxLat) / 2,
                   longitude: (mapBounds.minLon + mapBounds.maxLon) / 2,
-                  latitudeDelta: Math.max(mapBounds.maxLat - mapBounds.minLat, 0.015) * 1.3,
-                  longitudeDelta: Math.max(mapBounds.maxLon - mapBounds.minLon, 0.015) * 1.3,
                 }}
-              >
-                {/* OpenStreetMap raster tiles for Android & free platforms */}
-                <UrlTile
-                  urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  maximumZ={19}
-                  flipY={false}
-                  zIndex={-1}
-                />
-
-                {/* Waypoints path */}
-                {waypoints.length > 1 && (
-                  <Polyline
-                    coordinates={waypoints.map((wp) => ({
-                      latitude: wp.latitude,
-                      longitude: wp.longitude,
-                    }))}
-                    strokeColor="#2563EB"
-                    strokeWidth={4}
-                  />
-                )}
-
-                {/* Sample waypoints dots */}
-                {waypoints.map((wp, idx) => (
-                  <Circle
-                    key={idx}
-                    center={{ latitude: wp.latitude, longitude: wp.longitude }}
-                    radius={15}
-                    fillColor={wp.classification === 'indoor' ? '#F59E0B60' : '#10B98160'}
-                    strokeColor="#FFFFFF"
-                    strokeWidth={1}
-                  />
-                ))}
-
-                {/* Moving Replay Marker */}
-                {currentWaypoint && (
-                  <Marker
-                    coordinate={{
-                      latitude: currentWaypoint.latitude,
-                      longitude: currentWaypoint.longitude,
-                    }}
-                    title={currentWaypoint.zone_name || 'Posisi Perjalanan'}
-                    zIndex={99}
-                  >
-                    <View style={{ alignItems: 'center' }}>
-                      <View
-                        style={{
-                          backgroundColor: '#1E6CEF',
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                          marginBottom: 4,
-                          shadowColor: '#000',
-                          shadowOpacity: 0.2,
-                          shadowRadius: 3,
-                          elevation: 3,
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#FFFFFF' }}>
-                          {formatTime(currentWaypoint.timestamp)}
-                        </Text>
-                      </View>
-                      <View
-                        style={{
-                          width: 20,
-                          height: 20,
-                          borderRadius: 10,
-                          backgroundColor: '#EF4444',
-                          borderWidth: 3,
-                          borderColor: '#FFFFFF',
-                          shadowColor: '#000',
-                          shadowOpacity: 0.3,
-                          shadowRadius: 3,
-                          elevation: 4,
-                        }}
-                      />
-                    </View>
-                  </Marker>
-                )}
-              </MapView>
+                initialZoom={14}
+                polylines={journeyPolylines}
+                circles={journeyCircles}
+                markers={replayMarkers}
+                onMapReady={() => {
+                  if (waypoints.length > 1) {
+                    mapViewRef.current?.fitBounds(
+                      waypoints.map((w) => ({
+                        latitude: w.latitude,
+                        longitude: w.longitude,
+                      })),
+                      45
+                    );
+                  }
+                }}
+              />
             </View>
           )}
 
@@ -561,7 +544,9 @@ export default function DailyJourneyScreen() {
                   </Text>
                 </View>
                 <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
-                  {currentWaypoint.zone_name || 'Area Semarang'}
+                  {currentWaypoint.zone_name ||
+                    findNearestSemarangRoad(currentWaypoint.latitude, currentWaypoint.longitude)?.n ||
+                    'Area Semarang'}
                 </Text>
                 <View style={{ flexDirection: 'row', gap: 16 }}>
                   {typeof currentWaypoint.aqi === 'number' && (

@@ -7,7 +7,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,11 +17,16 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  OsmMapView,
+  OsmMapViewHandle,
+  OsmPolylineItem,
+} from '@/components/map/OsmMapView';
 import { useAuth } from '@/context/auth-context';
 import { navigationService } from '@/services/navigationService';
+import { findNearestSemarangRoad } from '@/services/semarangRoadService';
 import { zonesApi } from '@/services/zonesApi';
 import { useTrackingStore } from '@/stores/trackingStore';
 import { TrackingWaypoint } from '@/types/tracking';
@@ -48,7 +53,7 @@ export default function ActiveTrackingScreen() {
   const { user } = useAuth();
 
   const trackingStore = useTrackingStore();
-  const mapViewRef = useRef<MapView>(null);
+  const mapViewRef = useRef<OsmMapViewHandle>(null);
   const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
   const sessionIdRef = useRef<string>('');
   const isSyncingRef = useRef<boolean>(false);
@@ -305,77 +310,70 @@ export default function ActiveTrackingScreen() {
   // Center map on user location
   useEffect(() => {
     if (userLocation && mapViewRef.current && trackingStore.waypoints.length > 1) {
-      mapViewRef.current.animateToRegion({
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
-        latitudeDelta: 0.008,
-        longitudeDelta: 0.008,
-      }, 500);
+      mapViewRef.current.flyTo(userLocation.latitude, userLocation.longitude, 15.5);
     }
   }, [userLocation, trackingStore.waypoints.length]);
+
+  const trailPolylines = useMemo<OsmPolylineItem[]>(() => {
+    if (trackingStore.waypoints.length < 2) return [];
+    return [
+      {
+        id: 'tracking-trail',
+        color: '#10B981',
+        width: 5,
+        coordinates: trackingStore.waypoints.map((wp: TrackingWaypoint) => ({
+          latitude: wp.latitude,
+          longitude: wp.longitude,
+        })),
+      },
+    ];
+  }, [trackingStore.waypoints]);
+
+  const currentRoadLabel = useMemo(() => {
+    if (!userLocation) return null;
+    return findNearestSemarangRoad(userLocation.latitude, userLocation.longitude)?.n || null;
+  }, [userLocation]);
 
   const topPadding = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 8;
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+    <View style={{ flex: 1, backgroundColor: '#E2E8F0' }}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      {/* Map View without proprietary Google Maps key */}
-      <MapView
+      {/* OpenStreetMap / MapLibre Map (No Google Maps API key / Never Black) */}
+      <OsmMapView
         ref={mapViewRef}
         style={{ flex: 1 }}
-        initialRegion={{
-          latitude: userLocation?.latitude || -6.9932,
-          longitude: userLocation?.longitude || 110.4203,
-          latitudeDelta: 0.02,
-          longitudeDelta: 0.02,
-        }}
-        showsUserLocation
-        showsMyLocationButton={false}
-      >
-        {/* OpenStreetMap Raster Tile Layer for Android and free platforms */}
-        <UrlTile
-          urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maximumZ={19}
-          flipY={false}
-          zIndex={-1}
-        />
+        initialCenter={userLocation || { latitude: -6.9932, longitude: 110.4203 }}
+        initialZoom={14.5}
+        userLocation={userLocation}
+        followUserLocation={trackingStore.isTracking}
+        polylines={trailPolylines}
+      />
 
-        {/* Trail Polyline */}
-        {trackingStore.waypoints.length > 1 && (
-          <Polyline
-            coordinates={trackingStore.waypoints.map((wp: TrackingWaypoint) => ({
-              latitude: wp.latitude,
-              longitude: wp.longitude,
-            }))}
-            strokeColor="#10B981"
-            strokeWidth={5}
-          />
-        )}
-
-        {/* Current Position Marker */}
-        {userLocation && (
-          <Marker
-            coordinate={userLocation}
-            title="Lokasi Anda"
-          >
-            <View
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: 11,
-                backgroundColor: '#1E6CEF',
-                borderWidth: 3,
-                borderColor: '#FFFFFF',
-                shadowColor: '#000',
-                shadowOpacity: 0.3,
-                shadowRadius: 3,
-                elevation: 4,
-              }}
-            />
-          </Marker>
-        )}
-      </MapView>
+      {!trackingStore.isTracking && currentRoadLabel && (
+        <View
+          style={{
+            position: 'absolute',
+            top: topPadding + 52,
+            left: 16,
+            backgroundColor: 'rgba(255,255,255,0.94)',
+            borderRadius: 999,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            flexDirection: 'row',
+            alignItems: 'center',
+            borderWidth: 1,
+            borderColor: '#E2E8F0',
+            zIndex: 40,
+          }}
+        >
+          <Ionicons name="compass" size={14} color="#1E6CEF" style={{ marginRight: 6 }} />
+          <Text style={{ fontSize: 11.5, fontWeight: '700', color: '#0F172A' }}>
+            {currentRoadLabel}
+          </Text>
+        </View>
+      )}
 
       {/* Stats Panel (Top) */}
       {trackingStore.isTracking && (

@@ -12,7 +12,6 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SkinScanData } from '@/types/ai';
@@ -197,44 +196,62 @@ export default function SkinResultScreen() {
         >
           {/* AI Model & Validation Header Pill */}
           <View style={styles.aiBadgeWrap}>
-            <Ionicons name="shield-checkmark" size={14} color="#2563EB" />
+            <Ionicons name="shield-checkmark" size={14} color="#1E6CEF" />
             <Text style={styles.aiBadgeText}>
-              Agentic Skin AI • {data.model_used || 'qwen/qwen3.8-27b'} • SCIN Validated
+              Wood’s Lamp CV • {data.model_used || 'qwen/qwen3.8-27b'} • SCIN Validated
             </Text>
           </View>
 
-          {/* ─── 3 Difference Images from Agentic AI Pipeline ─── */}
+          {/* ─── 3 Difference Images from Wood's Lamp & Python CV (Horizontal Staggered) ─── */}
           <SkinDifferenceTriplet
             imageUri={currentScan?.imageUri}
             data={data}
             summary={currentScan?.agenticSummary}
           />
 
-          {/* Compact Agentic Pipeline Telemetry Strip */}
+          {/* Compact CV & Wood's Lamp Telemetry Strip */}
           {(() => {
             const agentSummary =
               currentScan?.agenticSummary || buildAgenticSummary(data);
             return (
-              <View style={styles.pipelineMetricsRow}>
-                <View style={styles.pipelineMetricChip}>
-                  <Text style={styles.pipelineMetricVal}>
-                    {agentSummary.landmarksCount}
-                  </Text>
-                  <Text style={styles.pipelineMetricLabel}>Landmarks Mesh</Text>
+              <>
+                <View style={styles.pipelineMetricsRow}>
+                  <View style={styles.pipelineMetricChip}>
+                    <Text style={styles.pipelineMetricVal}>
+                      {agentSummary.woodSebumIndex ?? 40}/100
+                    </Text>
+                    <Text style={styles.pipelineMetricLabel}>Sebum Wood’s UV</Text>
+                  </View>
+                  <View style={styles.pipelineMetricChip}>
+                    <Text style={styles.pipelineMetricVal}>
+                      {agentSummary.microRegionsCount ?? 396}+
+                    </Text>
+                    <Text style={styles.pipelineMetricLabel}>Mikro-Patch</Text>
+                  </View>
+                  <View style={styles.pipelineMetricChip}>
+                    <Text style={styles.pipelineMetricVal}>
+                      {agentSummary.tZoneScore}/{agentSummary.uZoneScore}
+                    </Text>
+                    <Text style={styles.pipelineMetricLabel}>Zona T / U</Text>
+                  </View>
                 </View>
-                <View style={styles.pipelineMetricChip}>
-                  <Text style={styles.pipelineMetricVal}>
-                    {agentSummary.microRegionsCount}+
-                  </Text>
-                  <Text style={styles.pipelineMetricLabel}>Mikro-Region</Text>
-                </View>
-                <View style={styles.pipelineMetricChip}>
-                  <Text style={styles.pipelineMetricVal}>
-                    {agentSummary.tZoneScore}/{agentSummary.uZoneScore}
-                  </Text>
-                  <Text style={styles.pipelineMetricLabel}>T-Zone / U-Zone</Text>
-                </View>
-              </View>
+
+                {data.cv_analysis?.woods_lamp_findings?.length ? (
+                  <View style={styles.woodFindingsCard}>
+                    <View style={styles.woodFindingsHeader}>
+                      <Ionicons name="flashlight-outline" size={14} color="#1E6CEF" />
+                      <Text style={styles.woodFindingsTitle}>
+                        Temuan Spektrum Wood’s Lamp (365nm UV)
+                      </Text>
+                    </View>
+                    {data.cv_analysis.woods_lamp_findings.map((finding, idx) => (
+                      <Text key={`wl-${idx}`} style={styles.woodFindingsItem}>
+                        • {finding}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </>
             );
           })()}
 
@@ -612,7 +629,33 @@ const styles = StyleSheet.create({
   pipelineMetricsRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 18,
+    marginTop: 14,
+    marginBottom: 14,
+  },
+  woodFindingsCard: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+    gap: 4,
+  },
+  woodFindingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  woodFindingsTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1E3A8A',
+  },
+  woodFindingsItem: {
+    fontSize: 12,
+    color: '#1E293B',
+    lineHeight: 17,
   },
   pipelineMetricChip: {
     flex: 1,

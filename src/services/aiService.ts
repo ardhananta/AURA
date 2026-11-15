@@ -4,6 +4,7 @@ import {
   CoughMobilityContext,
   CoughPredictionResponse,
   ScanSkinContext,
+  SkinCvAnalysis,
   SkinScanResponse,
   ScinMetadataResponse,
   PollutionHealthAnalysisContext,
@@ -39,7 +40,7 @@ export const aiService = {
         },
         {
           headers: { 'Content-Type': 'application/json' },
-          timeout: 25000,
+          timeout: 30000,
         }
       );
 
@@ -51,13 +52,50 @@ export const aiService = {
 
       return res.data;
     } catch (err: any) {
+      const rawData = err?.response?.data;
+      const status = err?.response?.status;
+      let serverText = '';
+      if (typeof rawData === 'string') {
+        serverText = rawData.includes('FUNCTION_INVOCATION_FAILED')
+          ? 'Server AI kulit (Vercel onnxaura) gagal booting (HTTP 500). Silakan deploy ulang backend onnxaura terbaru.'
+          : rawData.slice(0, 180);
+      }
       const errorMsg =
-        err?.response?.data?.detail ||
-        err?.response?.data?.message ||
-        err?.message ||
+        rawData?.detail ||
+        rawData?.message ||
+        serverText ||
+        (status >= 500
+          ? `Server AI kulit bermasalah (HTTP ${status}). Pastikan layanan backend aktif.`
+          : err?.message) ||
         'Tidak dapat terhubung ke server AI kulit (Groq/SCIN).';
       console.error('[aiService.scanSkin] Error:', errorMsg);
       throw new Error(errorMsg);
+    }
+  },
+
+  /**
+   * Fast Python CV geometry & Wood's Lamp preview on captured image (~150ms, no LLM wait).
+   * Returns null silently if endpoint is unavailable so scanSkin never blocks.
+   */
+  previewSkinGeometry: async (imageBase64: string): Promise<SkinCvAnalysis | null> => {
+    const formattedBase64 = imageBase64.startsWith('data:image')
+      ? imageBase64
+      : `data:image/jpeg;base64,${imageBase64}`;
+    try {
+      const res = await axios.post<{ success: boolean; cv_analysis?: SkinCvAnalysis }>(
+        `${AI_API_URL}/api/skin/cv-preview`,
+        { image_base64: formattedBase64 },
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 12000,
+        }
+      );
+      if (res.data?.success && res.data.cv_analysis) {
+        return res.data.cv_analysis;
+      }
+      return null;
+    } catch {
+      return null;
     }
   },
 

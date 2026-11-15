@@ -80,6 +80,51 @@ export interface ScinValidation {
   is_scin_verified: boolean;
 }
 
+export interface FaceGeometry {
+  detected: boolean;
+  tilt_deg: number;
+  bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  landmarks: {
+    forehead: [number, number];
+    left_eye: [number, number];
+    right_eye: [number, number];
+    nose_tip: [number, number];
+    left_cheek: [number, number];
+    right_cheek: [number, number];
+    mouth_center: [number, number];
+    chin: [number, number];
+  };
+  contour: [number, number][];
+  t_zone: [number, number][];
+  left_cheek_zone: [number, number][];
+  right_cheek_zone: [number, number][];
+}
+
+export interface SkinCvMetrics {
+  tzone_sebum_fluorescence: number;
+  erythema_index: number;
+  melanin_uv_contrast: number;
+  uniformity_score: number;
+  skin_coverage_pct: number;
+  image_width: number;
+  image_height: number;
+}
+
+export interface SkinCvAnalysis {
+  face_geometry: FaceGeometry;
+  cropped_face_image?: string;
+  woodlamp_image: string;
+  geometry_mesh_image: string;
+  micro_analysis_image: string;
+  cv_metrics: SkinCvMetrics;
+  woods_lamp_findings: string[];
+}
+
 export interface SkinScanData {
   condition: string;
   condition_indonesian: string;
@@ -94,6 +139,7 @@ export interface SkinScanData {
   recommendations: string[];
   summary: string;
   medical_disclaimer: string;
+  cv_analysis?: SkinCvAnalysis;
 }
 
 export interface SkinScanResponse {

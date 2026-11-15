@@ -11,8 +11,6 @@ import {
   ActivityIndicator,
   ScrollView,
   TextInput,
-  Linking,
-  Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,64 +34,6 @@ interface RoadEntry {
 }
 
 const ROAD_DATA = semarangRoads as RoadEntry[];
-
-// ─── Navigation Helpers ───────────────────────────────────────────────────────
-/**
- * Buka navigasi ke koordinat tujuan menggunakan Google Maps, Apple Maps, atau Waze.
- * Fallback graceful antar-platform.
- */
-async function openNavigation(
-  destLat: number,
-  destLon: number,
-  destName: string,
-  originLat?: number,
-  originLon?: number
-) {
-  const label = encodeURIComponent(destName);
-
-  // Google Maps — works on both Android & iOS
-  const googleUrl = originLat != null && originLon != null
-    ? `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`
-    : `https://www.google.com/maps/search/?api=1&query=${destLat},${destLon}`;
-
-  // Apple Maps — iOS native
-  const appleUrl = `maps://maps.apple.com/?daddr=${destLat},${destLon}&dirflg=d`;
-
-  // Waze deep link
-  const wazeUrl = `https://waze.com/ul?ll=${destLat},${destLon}&navigate=yes`;
-
-  if (Platform.OS === 'ios') {
-    // Prefer Apple Maps on iOS, fallback to Google Maps
-    const canApple = await Linking.canOpenURL(appleUrl).catch(() => false);
-    if (canApple) {
-      await Linking.openURL(appleUrl);
-      return;
-    }
-  }
-
-  // Check if Waze is installed
-  const canWaze = await Linking.canOpenURL('waze://').catch(() => false);
-
-  Alert.alert(
-    '🧭 Navigasi ke',
-    destName,
-    [
-      {
-        text: 'Google Maps',
-        onPress: () => Linking.openURL(googleUrl),
-      },
-      ...(canWaze ? [{
-        text: 'Waze',
-        onPress: () => Linking.openURL(wazeUrl),
-      }] : []),
-      ...(Platform.OS === 'ios' ? [{
-        text: 'Apple Maps',
-        onPress: () => Linking.openURL(appleUrl),
-      }] : []),
-      { text: 'Batal', style: 'cancel' as const },
-    ]
-  );
-}
 
 interface FullscreenSemarangMapModalProps {
   visible: boolean;
@@ -237,28 +177,32 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     searchInputRef.current?.blur();
   }, [flyToLocation]);
 
-  /** Navigate to searchTarget using external map app */
+  /** Navigate to searchTarget using in-app Universal Navigation (OSM + Semarang GPKG) */
   const handleNavigateToTarget = useCallback(() => {
     if (!searchTarget) return;
-    openNavigation(
-      searchTarget.lat,
-      searchTarget.lon,
-      searchTarget.n,
-      userLocation?.lat,
-      userLocation?.lon,
-    );
-  }, [searchTarget, userLocation]);
+    onClose();
+    router.push({
+      pathname: '/universal-navigation',
+      params: {
+        destLat: String(searchTarget.lat),
+        destLon: String(searchTarget.lon),
+        destName: searchTarget.n,
+      },
+    });
+  }, [searchTarget, onClose, router]);
 
-  /** Navigate to a zone result */
+  /** Navigate to a zone result using in-app Universal Navigation */
   const handleNavigateToZone = useCallback((zone: NearbyZoneResult) => {
-    openNavigation(
-      zone.zone.latitude,
-      zone.zone.longitude,
-      zone.zone.name,
-      userLocation?.lat,
-      userLocation?.lon,
-    );
-  }, [userLocation]);
+    onClose();
+    router.push({
+      pathname: '/universal-navigation',
+      params: {
+        destLat: String(zone.zone.latitude),
+        destLon: String(zone.zone.longitude),
+        destName: zone.zone.name,
+      },
+    });
+  }, [onClose, router]);
 
   useEffect(() => {
     if (userLocation) {

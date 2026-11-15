@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Dimensions,
+  Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
@@ -13,9 +15,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { aiService } from '@/services/aiService';
-import { ScanSkinContext } from '@/types/ai';
+import { ScanSkinContext, SkinCvAnalysis } from '@/types/ai';
 import { useAuth } from '@/context/auth-context';
 import { backgroundMobilityTracker } from '@/services/backgroundMobilityTracker';
 import { SavedSkinScan, skinHistoryService } from '@/services/skinHistoryService';
@@ -26,6 +29,11 @@ import {
   SkinDifferenceTriplet,
   buildAgenticSummary,
 } from '@/components/skin/SkinAnalysisVisuals';
+import {
+  LiveFaceStatus,
+  LiveFaceTrackerCamera,
+  LiveFaceTrackerHandle,
+} from '@/components/skin/LiveFaceTrackerCamera';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -36,17 +44,32 @@ export default function SkinCheckScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const cameraRef = useRef<CameraView>(null);
+  const liveTrackerRef = useRef<LiveFaceTrackerHandle>(null);
   const scanSessionRef = useRef(0);
+  const isCapturingRef = useRef(false);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'back' | 'front'>('front');
   const [flash, setFlash] = useState<'off' | 'on'>('off');
+  const [cameraReady, setCameraReady] = useState(false);
+  const [useFallbackCamera, setUseFallbackCamera] = useState(Platform.OS === 'web');
+  const [liveFaceStatus, setLiveFaceStatus] = useState<LiveFaceStatus>({
+    detected: false,
+    centered: false,
+    forward: false,
+  });
 
   const [state, setState] = useState<DetectionState>('idle');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [pipelineStep, setPipelineStep] = useState(0);
+  const [liveCvPreview, setLiveCvPreview] = useState<SkinCvAnalysis | null>(null);
   const [savedScan, setSavedScan] = useState<SavedSkinScan | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const topPad =
+    Platform.OS === 'android'
+      ? Math.max(insets.top, StatusBar.currentHeight || 24) + 6
+      : insets.top + 6;
 
   // Advance visual Agentic AI pipeline steps cleanly while analysis runs
   useEffect(() => {
@@ -81,15 +104,35 @@ export default function SkinCheckScreen() {
     setFlash((current) => (current === 'off' ? 'on' : 'off'));
   };
 
+  const resolveImageBase64 = async (
+    uri: string,
+    providedBase64?: string | null
+  ): Promise<string> => {
+    if (providedBase64 && providedBase64.length > 64) {
+      return providedBase64;
+    }
+    if (uri.startsWith('data:image')) {
+      return uri;
+    }
+    const base64FromFile = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (!base64FromFile) {
+      throw new Error('Gagal membaca data gambar wajah.');
+    }
+    return base64FromFile;
+  };
+
   const runAnalysis = async (uri: string, base64?: string | null) => {
     const sessionId = ++scanSessionRef.current;
     setPhotoUri(uri);
+    setLiveCvPreview(null);
     setSavedScan(null);
     setErrorMessage(null);
     setPipelineStep(0);
     setState('analyzing');
 
-    // Collect real mobility waypoints context without dummy data
+    // Collect real mobility waypoints context
     const waypoints = backgroundMobilityTracker.getCollectedWaypoints();
     let totalOutdoor = 0;
     let totalIndoor = 0;
@@ -114,18 +157,50 @@ export default function SkinCheckScreen() {
     const startedAt = Date.now();
 
     try {
-      if (!base64 && !uri) {
+      if (!uri && !base64) {
         throw new Error('Foto kulit wajah tidak ditemukan.');
       }
 
-      const res = await aiService.scanSkin(base64 || uri, context);
+      const encodedBase64 = await resolveImageBase64(uri, base64);
+      if (sessionId !== scanSessionRef.current) return;
+
+      let cvShown = false;
+      let latestCroppedFaceUri: string | undefined;
+      // Immediately fit Python CV face geometry & Wood's Lamp onto the captured face photo
+      void aiService.previewSkinGeometry(encodedBase64).then((preview) => {
+        if (preview && sessionId === scanSessionRef.current) {
+          cvShown = true;
+          setLiveCvPreview(preview);
+          if (preview.cropped_face_image) {
+            latestCroppedFaceUri = preview.cropped_face_image;
+            setPhotoUri(preview.cropped_face_image);
+          }
+        }
+      });
+
+      const res = await aiService.scanSkin(encodedBase64, context);
       if (sessionId !== scanSessionRef.current) return;
 
       if (!res || !res.data) {
         throw new Error('Format respon analisis kulit tidak valid.');
       }
 
-      // Ensure user sees all Agentic AI preprocessing & mapping substeps complete
+      if (res.data.cv_analysis) {
+        setLiveCvPreview(res.data.cv_analysis);
+        if (!cvShown) {
+          setPipelineStep(2);
+          await new Promise((resolve) => setTimeout(resolve, 650));
+          if (sessionId !== scanSessionRef.current) return;
+        }
+      }
+
+      const finalFaceUri =
+        res.data.cv_analysis?.cropped_face_image || latestCroppedFaceUri || uri;
+      if (finalFaceUri && finalFaceUri !== uri) {
+        setPhotoUri(finalFaceUri);
+      }
+
+      // Let user see both Agentic AI stages finish
       const elapsed = Date.now() - startedAt;
       if (elapsed < minAgenticVisualDurationMs) {
         await new Promise((resolve) =>
@@ -135,7 +210,7 @@ export default function SkinCheckScreen() {
       if (sessionId !== scanSessionRef.current) return;
 
       const summary = buildAgenticSummary(res.data);
-      const saved = await skinHistoryService.saveScan(res.data, uri, summary);
+      const saved = await skinHistoryService.saveScan(res.data, finalFaceUri, summary);
       if (sessionId !== scanSessionRef.current) return;
 
       setSavedScan(saved);
@@ -153,7 +228,7 @@ export default function SkinCheckScreen() {
   };
 
   const handleCapturePhoto = async () => {
-    if (state !== 'idle') return;
+    if (state !== 'idle' || isCapturingRef.current) return;
 
     if (!permission?.granted) {
       const res = await requestPermission();
@@ -166,59 +241,76 @@ export default function SkinCheckScreen() {
       }
     }
 
-    if (cameraRef.current) {
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.85,
-          base64: true,
-        });
-        if (photo?.uri) {
-          runAnalysis(photo.uri, photo.base64);
-          return;
-        }
-      } catch (err: any) {
-        console.error('[SkinScan] takePictureAsync failed:', err);
-        setErrorMessage(
-          'Gagal mengambil foto dari kamera: ' + (err?.message || 'Kamera tidak merespon')
-        );
-        setState('error');
-        return;
-      }
+    if (!useFallbackCamera && liveTrackerRef.current) {
+      isCapturingRef.current = true;
+      liveTrackerRef.current.capture();
+      return;
     }
 
-    setErrorMessage(
-      'Kamera belum siap. Pastikan perangkat memiliki modul kamera yang aktif.'
-    );
-    setState('error');
+    if (!cameraRef.current) {
+      setErrorMessage(
+        'Kamera belum siap. Pastikan perangkat memiliki modul kamera yang aktif.'
+      );
+      setState('error');
+      return;
+    }
+
+    isCapturingRef.current = true;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.48,
+        base64: true,
+      });
+      if (photo?.uri) {
+        void runAnalysis(photo.uri, photo.base64);
+        return;
+      }
+      setErrorMessage('Foto tidak berhasil diambil dari kamera.');
+      setState('error');
+    } catch (err: any) {
+      console.error('[SkinScan] takePictureAsync failed:', err);
+      setErrorMessage(
+        'Gagal mengambil foto dari kamera: ' + (err?.message || 'Kamera tidak merespon')
+      );
+      setState('error');
+    } finally {
+      isCapturingRef.current = false;
+    }
   };
 
   const handleLaunchGallery = async () => {
-    if (state !== 'idle') return;
+    if (state !== 'idle' || isCapturingRef.current) return;
+    isCapturingRef.current = true;
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [3, 4],
-        quality: 0.85,
+        quality: 0.52,
         base64: true,
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
-        runAnalysis(asset.uri, asset.base64);
+        void runAnalysis(asset.uri, asset.base64);
       }
     } catch (err: any) {
       console.error('[SkinScan] Gallery error:', err);
       setErrorMessage('Gagal memilih foto dari galeri: ' + (err?.message || 'Error'));
       setState('error');
+    } finally {
+      isCapturingRef.current = false;
     }
   };
 
   const handleRetry = () => {
     scanSessionRef.current += 1;
+    isCapturingRef.current = false;
     setPhotoUri(null);
+    setLiveCvPreview(null);
     setSavedScan(null);
     setPipelineStep(0);
     setErrorMessage(null);
+    setLiveFaceStatus({ detected: false, centered: false, forward: false });
     setState('idle');
   };
 
@@ -230,16 +322,48 @@ export default function SkinCheckScreen() {
     });
   };
 
+  const viewfinderW = Math.min(SCREEN_WIDTH * 0.78, 300);
+  const viewfinderH = Math.min(SCREEN_HEIGHT * 0.5, 360);
+
+  const isLightBackdrop = state === 'analyzing' || state === 'diff_ready';
+
   return (
     <View style={styles.root}>
-      {/* ─── 1. FULLSCREEN LIVE CAMERA OR SCANNED PHOTO ─── */}
+      <StatusBar
+        barStyle={isLightBackdrop ? 'dark-content' : 'light-content'}
+        backgroundColor="transparent"
+        translucent
+      />
+
+      {/* ─── 1. FULLSCREEN LIVE FACE-TRACKED CAMERA OR FALLBACK / SCANNED PHOTO ─── */}
       {permission?.granted && state === 'idle' ? (
-        <CameraView
-          ref={cameraRef}
-          style={StyleSheet.absoluteFill}
-          facing={facing}
-          flash={flash}
-        />
+        useFallbackCamera ? (
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing={facing}
+            flash={flash}
+            onCameraReady={() => setCameraReady(true)}
+          />
+        ) : (
+          <LiveFaceTrackerCamera
+            ref={liveTrackerRef}
+            facing={facing}
+            flash={flash}
+            active={Boolean(permission?.granted && state === 'idle' && !useFallbackCamera)}
+            onReadyChange={(ready) => setCameraReady(ready)}
+            onFaceStatusChange={setLiveFaceStatus}
+            onCaptured={(dataUrl) => {
+              isCapturingRef.current = false;
+              void runAnalysis(dataUrl, dataUrl);
+            }}
+            onFallbackRequired={() => {
+              isCapturingRef.current = false;
+              setCameraReady(false);
+              setUseFallbackCamera(true);
+            }}
+          />
+        )
       ) : photoUri ? (
         <Image
           source={{ uri: photoUri }}
@@ -248,60 +372,64 @@ export default function SkinCheckScreen() {
         />
       ) : (
         <LinearGradient
-          colors={['#0F172A', '#1E3A8A', '#0F172A']}
+          colors={['#0F2B6B', '#1E3A8A', '#0F172A']}
           style={StyleSheet.absoluteFill}
         />
       )}
 
-      {/* Dark Backdrop when in Agentic Pipeline or 3-Image Diff Review */}
+      {/* Clean White-Blue Clinical Backdrop during Pipeline / 3 Horizontal Diff Review */}
       {(state === 'analyzing' || state === 'diff_ready') && (
+        <LinearGradient
+          colors={['#F8FAFC', '#EFF6FF', '#FFFFFF']}
+          style={StyleSheet.absoluteFill}
+        />
+      )}
+
+      {state === 'error' && (
         <View
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: 'rgba(2, 6, 23, 0.86)' },
+            { backgroundColor: 'rgba(15, 23, 42, 0.85)' },
           ]}
         />
       )}
 
-      {/* Top & Bottom Vignettes (Idle Camera State) */}
-      {state === 'idle' && (
-        <>
-          <LinearGradient
-            colors={['rgba(2, 6, 23, 0.72)', 'transparent']}
-            style={styles.topVignette}
-            pointerEvents="none"
-          />
-          <LinearGradient
-            colors={['transparent', 'rgba(2, 6, 23, 0.85)']}
-            style={styles.bottomVignette}
-            pointerEvents="none"
-          />
-        </>
-      )}
-
-      {/* ─── 2. TOP NAVIGATION BAR (DEDICATED SKIN AI - NO LUNG CHECK LINK) ─── */}
-      <View style={[styles.topNavBar, { paddingTop: insets.top + 8 }]}>
+      {/* ─── 2. TOP NAVIGATION BAR (NO LUNG CHECK LINK) ─── */}
+      <View style={[styles.topNavBar, { paddingTop: topPad }]}>
         <Pressable
-          style={styles.circleBtn}
-          onPress={handleBack}
+          style={[styles.circleBtn, isLightBackdrop && styles.circleBtnLight]}
+          onPress={state === 'idle' ? handleBack : handleRetry}
           hitSlop={12}
-          accessibilityLabel="Kembali"
+          accessibilityLabel={state === 'idle' ? 'Kembali' : 'Ulangi Scan'}
         >
-          <Ionicons name="arrow-back" size={22} color="white" />
+          <Ionicons
+            name={state === 'idle' ? 'arrow-back' : 'close'}
+            size={21}
+            color={isLightBackdrop ? '#1E6CEF' : '#FFFFFF'}
+          />
         </Pressable>
 
-        <View style={styles.headerBrandPill}>
-          <Ionicons name="person-circle-outline" size={16} color="#38BDF8" />
-          <Text style={styles.headerBrandText}>AURA Skin AI • Wajah</Text>
-        </View>
+        {isLightBackdrop ? (
+          <View style={styles.lightTopTitlePill}>
+            <View style={styles.lightTopBlueDot} />
+            <Text style={styles.lightTopTitleText}>
+              {state === 'analyzing' ? "Wood's Lamp & CV Pipeline" : 'Analisis Visual Wajah'}
+            </Text>
+          </View>
+        ) : null}
 
+        {/* Quick tools (History / Flash / Flip) - zero Lung Check navigation */}
         <View style={styles.cameraControlsRow}>
           <Pressable
-            style={styles.circleBtnSmall}
+            style={[styles.circleBtnSmall, isLightBackdrop && styles.circleBtnLight]}
             onPress={() => router.push('/skin-result')}
             accessibilityLabel="Riwayat Analisis Kulit"
           >
-            <Ionicons name="time-outline" size={18} color="white" />
+            <Ionicons
+              name="time-outline"
+              size={18}
+              color={isLightBackdrop ? '#1E6CEF' : '#FFFFFF'}
+            />
           </Pressable>
           {permission?.granted && state === 'idle' && (
             <>
@@ -309,25 +437,82 @@ export default function SkinCheckScreen() {
                 <Ionicons
                   name={flash === 'on' ? 'flash' : 'flash-off'}
                   size={18}
-                  color={flash === 'on' ? '#FFB433' : 'white'}
+                  color={flash === 'on' ? '#FBBF24' : '#FFFFFF'}
                 />
               </Pressable>
               <Pressable style={styles.circleBtnSmall} onPress={toggleCameraFacing}>
-                <Ionicons name="camera-reverse" size={18} color="white" />
+                <Ionicons name="camera-reverse" size={18} color="#FFFFFF" />
               </Pressable>
             </>
           )}
         </View>
       </View>
 
-      {/* ─── 3. CAMERA PERMISSION PROMPT ─── */}
+      {/* ─── 3. TWO DYNAMIC LIVE FACE ALIGNMENT PILLS ─── */}
+      {state === 'idle' && (
+        <View style={styles.statusPillsRow}>
+          <View style={styles.blueStatusPill}>
+            <View
+              style={[
+                styles.blueCheckCircle,
+                {
+                  backgroundColor: useFallbackCamera
+                    ? '#1E6CEF'
+                    : liveFaceStatus.detected && liveFaceStatus.centered
+                    ? '#10B981'
+                    : '#94A3B8',
+                },
+              ]}
+            >
+              <Ionicons
+                name={
+                  useFallbackCamera || (liveFaceStatus.detected && liveFaceStatus.centered)
+                    ? 'checkmark'
+                    : 'scan-outline'
+                }
+                size={11}
+                color="#FFFFFF"
+              />
+            </View>
+            <Text style={styles.bluePillText}>Posisi wajah</Text>
+          </View>
+
+          <View style={styles.blueStatusPill}>
+            <View
+              style={[
+                styles.blueCheckCircle,
+                {
+                  backgroundColor: useFallbackCamera
+                    ? '#1E6CEF'
+                    : liveFaceStatus.detected && liveFaceStatus.forward
+                    ? '#10B981'
+                    : '#94A3B8',
+                },
+              ]}
+            >
+              <Ionicons
+                name={
+                  useFallbackCamera || (liveFaceStatus.detected && liveFaceStatus.forward)
+                    ? 'checkmark'
+                    : 'eye-outline'
+                }
+                size={11}
+                color="#FFFFFF"
+              />
+            </View>
+            <Text style={styles.bluePillText}>Hadap depan</Text>
+          </View>
+        </View>
+      )}
+
+      {/* ─── 4. CAMERA PERMISSION PROMPT ─── */}
       {!permission?.granted && state === 'idle' && (
         <View style={styles.permissionCard}>
           <Ionicons name="camera" size={38} color="#FFFFFF" style={{ marginBottom: 10 }} />
           <Text style={styles.permissionTitle}>Akses Kamera Diperlukan</Text>
           <Text style={styles.permissionDesc}>
-            AURA membutuhkan akses kamera untuk memindai kontur wajah dan menganalisis
-            kondisi kulit Anda secara akurat.
+            AURA membutuhkan akses kamera untuk memindai wajah Anda dengan 3D Facial Mesh
+            dan menganalisis kondisi kulit.
           </Text>
           <Pressable style={styles.permissionBtn} onPress={requestPermission}>
             <Text style={styles.permissionBtnText}>Izinkan Kamera</Text>
@@ -335,29 +520,30 @@ export default function SkinCheckScreen() {
         </View>
       )}
 
-      {/* ─── 4. ANATOMICAL FACE-SHAPED SCANNER OVERLAY (IDLE) ─── */}
+      {/* ─── 5. CORNER BRACKETS + LIVE ALIGNMENT CUE (DYNAMIC MESH DRAWN LIVE BY TRACKER) ─── */}
       {state === 'idle' && (
-        <View style={styles.faceMaskStage} pointerEvents="none">
+        <View style={styles.viewfinderStage} pointerEvents="none">
           <FaceScanMaskOverlay
-            width={SCREEN_WIDTH}
-            height={SCREEN_HEIGHT}
-            isAnalyzing={false}
+            frameWidth={viewfinderW}
+            frameHeight={viewfinderH}
+            showCornerBrackets={true}
+            showMesh={useFallbackCamera}
+            statusLabel={
+              permission?.granted && !cameraReady
+                ? 'Menyiapkan kamera...'
+                : useFallbackCamera
+                ? 'Sejajarkan wajah di bingkai'
+                : liveFaceStatus.detected && liveFaceStatus.centered && liveFaceStatus.forward
+                ? 'Siap! Ketuk tombol'
+                : liveFaceStatus.detected
+                ? 'Posisikan wajah lurus ke tengah'
+                : 'Arahkan wajah ke kamera'
+            }
           />
-          <View style={styles.guidanceBannerWrap}>
-            <View style={styles.liveScannerBadge}>
-              <View style={[styles.liveDot, { backgroundColor: '#38BDF8' }]} />
-              <Text style={styles.liveScannerBadgeText}>
-                POSISIKAN WAJAH MENGIKUTI BINGKAI KONTUR
-              </Text>
-            </View>
-            <Text style={styles.guidanceSubText}>
-              Cahaya merata • Bebas rambut menutupi dahi & pipi
-            </Text>
-          </View>
         </View>
       )}
 
-      {/* ─── 5. AGENTIC AI PROCESSING PIPELINE (POST-SCAN) ─── */}
+      {/* ─── 6. AGENTIC AI PROCESSING PIPELINE (POST-SCAN) ─── */}
       {state === 'analyzing' && (
         <ScrollView
           style={styles.pipelineScroll}
@@ -371,11 +557,12 @@ export default function SkinCheckScreen() {
             photoUri={photoUri}
             activeStepIndex={pipelineStep}
             isCompleted={false}
+            cvPreview={liveCvPreview}
           />
         </ScrollView>
       )}
 
-      {/* ─── 6. 3 DIFFERENCE IMAGES OUTPUT BEFORE FINAL ANALYSIS PAGE ─── */}
+      {/* ─── 7. 3 DIFFERENCE IMAGES OUTPUT BEFORE FINAL ANALYSIS PAGE ─── */}
       {state === 'diff_ready' && savedScan && (
         <ScrollView
           style={styles.pipelineScroll}
@@ -386,14 +573,16 @@ export default function SkinCheckScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.diffReadyBanner}>
-            <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+            <View style={styles.diffReadyCheckWrap}>
+              <Ionicons name="checkmark" size={15} color="#FFFFFF" />
+            </View>
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={styles.diffReadyBannerTitle}>
-                Agentic AI Selesai • 3 Citra Perbedaan Dihasilkan
+                Transformasi Wood’s Lamp & Geometri Selesai
               </Text>
               <Text style={styles.diffReadyBannerSub}>
-                Tinjau 3 citra hasil preprocessing HSV/YCbCr, 468-point mesh T/U-Zone, dan
-                peta mikro-region 384+ patch sebelum melihat diagnosis akhir.
+                3 citra perbedaan muncul bertahap: Wood’s Lamp UV 365nm, Geometri Wajah Otomatis,
+                dan Peta 384+ Mikro-Patch sebelum hasil klinis akhir.
               </Text>
             </View>
           </View>
@@ -408,7 +597,7 @@ export default function SkinCheckScreen() {
         </ScrollView>
       )}
 
-      {/* ─── 7. ERROR CARD ─── */}
+      {/* ─── 8. ERROR CARD ─── */}
       {state === 'error' && (
         <View style={styles.centerArea}>
           <View style={styles.errorCard}>
@@ -423,41 +612,40 @@ export default function SkinCheckScreen() {
         </View>
       )}
 
-      {/* ─── 8. BOTTOM CONTROLS BAR ─── */}
+      {/* ─── 9. BOTTOM SHUTTER CONTROLS (MATCHING PURPLE-RING WHITE BUTTON) ─── */}
       {state === 'idle' && (
-        <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 24 }]}>
-          <View style={styles.idleBottomContainer}>
-            <View style={styles.shutterRow}>
-              <Pressable
-                style={styles.sideControlBtn}
-                onPress={handleLaunchGallery}
-                hitSlop={8}
-                accessibilityLabel="Pilih dari Galeri"
-              >
-                <Ionicons name="images" size={24} color="#FFFFFF" />
-                <Text style={styles.sideControlBtnText}>Galeri</Text>
-              </Pressable>
+        <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 22 }]}>
+          <View style={styles.shutterRow}>
+            <Pressable
+              style={styles.sideControlBtn}
+              onPress={handleLaunchGallery}
+              hitSlop={8}
+              accessibilityLabel="Pilih dari Galeri"
+            >
+              <Ionicons name="images-outline" size={22} color="#FFFFFF" />
+              <Text style={styles.sideControlBtnText}>Galeri</Text>
+            </Pressable>
 
-              <Pressable
-                style={styles.shutterOuterRing}
-                onPress={handleCapturePhoto}
-                accessibilityLabel="Ambil Foto Wajah dan Pindai Kulit"
-              >
-                <View style={styles.shutterInnerButton}>
-                  <Ionicons name="scan" size={28} color="#2373F4" />
-                </View>
-              </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.shutterBlueRing,
+                pressed && { transform: [{ scale: 0.94 }] },
+              ]}
+              onPress={handleCapturePhoto}
+              accessibilityLabel="Ambil Foto Wajah dan Pindai Kulit"
+            >
+              <View style={styles.shutterWhiteCore} />
+            </Pressable>
 
-              <Pressable
-                style={styles.sideControlBtn}
-                onPress={toggleCameraFacing}
-                hitSlop={8}
-                accessibilityLabel="Putar Kamera"
-              >
-                <Ionicons name="camera-reverse" size={24} color="#FFFFFF" />
-                <Text style={styles.sideControlBtnText}>Putar</Text>
-              </Pressable>
-            </View>
+            <Pressable
+              style={styles.sideControlBtn}
+              onPress={toggleCameraFacing}
+              hitSlop={8}
+              accessibilityLabel="Putar Kamera"
+            >
+              <Ionicons name="camera-reverse-outline" size={22} color="#FFFFFF" />
+              <Text style={styles.sideControlBtnText}>Putar</Text>
+            </Pressable>
           </View>
         </View>
       )}
@@ -465,7 +653,7 @@ export default function SkinCheckScreen() {
       {state === 'diff_ready' && savedScan && (
         <View style={[styles.diffReadyFooter, { paddingBottom: insets.bottom + 14 }]}>
           <Pressable style={styles.diffRescanBtn} onPress={handleRetry}>
-            <Ionicons name="refresh" size={17} color="#E2E8F0" />
+            <Ionicons name="refresh" size={17} color="#1E6CEF" />
             <Text style={styles.diffRescanText}>Ulang</Text>
           </Pressable>
           <Pressable style={styles.diffContinueBtn} onPress={handleOpenFinalResult}>
@@ -479,7 +667,7 @@ export default function SkinCheckScreen() {
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 24 }]}>
           <View style={styles.resultBtns}>
             <Pressable style={styles.retryBtn} onPress={handleRetry}>
-              <Ionicons name="refresh" size={18} color="#2373F4" />
+              <Ionicons name="refresh" size={18} color="#1E6CEF" />
               <Text style={styles.retryBtnTxt}>Pindai Ulang</Text>
             </Pressable>
             <Pressable style={styles.homeBtn} onPress={handleBack}>
@@ -498,71 +686,104 @@ const styles = StyleSheet.create({
     backgroundColor: '#020617',
     position: 'relative',
   },
-  topVignette: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 150,
-    zIndex: 10,
-  },
-  bottomVignette: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 210,
-    zIndex: 10,
-  },
   topNavBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    zIndex: 25,
+    paddingBottom: 8,
+    zIndex: 30,
   },
   circleBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerBrandPill: {
+  circleBtnLight: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  lightTopTitlePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.35)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    borderColor: '#DBEAFE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 999,
   },
-  headerBrandText: {
-    color: '#F8FAFC',
-    fontSize: 12.5,
+  lightTopBlueDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#1E6CEF',
+  },
+  lightTopTitleText: {
+    color: '#0F172A',
+    fontSize: 12,
     fontWeight: '800',
-    letterSpacing: 0.2,
   },
   cameraControlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   circleBtnSmall: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  statusPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    marginTop: 4,
+    zIndex: 25,
+  },
+  blueStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingVertical: 7,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    gap: 6,
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.14,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  blueCheckCircle: {
+    width: 17,
+    height: 17,
+    borderRadius: 8.5,
+    backgroundColor: '#1E6CEF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluePillText: {
+    color: '#0F172A',
+    fontSize: 12.5,
+    fontWeight: '700',
   },
   permissionCard: {
     position: 'absolute',
@@ -573,7 +794,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 24,
     alignItems: 'center',
-    zIndex: 30,
+    zIndex: 35,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.16)',
   },
@@ -592,7 +813,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   permissionBtn: {
-    backgroundColor: '#2373F4',
+    backgroundColor: '#1E6CEF',
     paddingVertical: 10,
     paddingHorizontal: 24,
     borderRadius: 999,
@@ -602,48 +823,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  faceMaskStage: {
+  viewfinderStage: {
     flex: 1,
-    justifyContent: 'flex-end',
     alignItems: 'center',
-    zIndex: 15,
-  },
-  guidanceBannerWrap: {
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingHorizontal: 20,
-  },
-  liveScannerBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.35)',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  liveScannerBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 10.5,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  guidanceSubText: {
-    color: 'rgba(226, 232, 240, 0.85)',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 6,
+    justifyContent: 'center',
+    zIndex: 20,
   },
   pipelineScroll: {
     flex: 1,
-    zIndex: 20,
+    zIndex: 25,
   },
   pipelineScrollContent: {
     paddingHorizontal: 16,
@@ -656,28 +844,44 @@ const styles = StyleSheet.create({
   diffReadyBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: 'rgba(16, 185, 129, 0.14)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.38)',
+    borderColor: '#BFDBFE',
     borderRadius: 16,
     padding: 12,
     marginBottom: 12,
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  diffReadyCheckWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#1E6CEF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
   },
   diffReadyBannerTitle: {
-    color: '#ECFDF5',
+    color: '#0F172A',
     fontSize: 13.5,
     fontWeight: '800',
   },
   diffReadyBannerSub: {
-    color: '#CBD5E1',
+    color: '#475569',
     fontSize: 11.5,
     lineHeight: 16.5,
     marginTop: 2,
   },
   diffCardSurface: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
     padding: 14,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
   },
   diffReadyFooter: {
     position: 'absolute',
@@ -689,10 +893,10 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 16,
     paddingTop: 12,
-    backgroundColor: 'rgba(2, 6, 23, 0.94)',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(148, 163, 184, 0.2)',
-    zIndex: 30,
+    borderTopColor: '#DBEAFE',
+    zIndex: 35,
   },
   diffRescanBtn: {
     flexDirection: 'row',
@@ -702,12 +906,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 16,
-    backgroundColor: 'rgba(30, 41, 59, 0.9)',
+    backgroundColor: '#EFF6FF',
     borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.35)',
+    borderColor: '#BFDBFE',
   },
   diffRescanText: {
-    color: '#F1F5F9',
+    color: '#1E6CEF',
     fontSize: 13.5,
     fontWeight: '700',
   },
@@ -719,7 +923,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 16,
-    backgroundColor: '#2373F4',
+    backgroundColor: '#1E6CEF',
   },
   diffContinueText: {
     color: '#FFFFFF',
@@ -730,7 +934,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 20,
+    zIndex: 25,
     paddingHorizontal: 20,
   },
   errorCard: {
@@ -758,7 +962,7 @@ const styles = StyleSheet.create({
   retryActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2373F4',
+    backgroundColor: '#1E6CEF',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 999,
@@ -772,52 +976,49 @@ const styles = StyleSheet.create({
   bottomBar: {
     alignItems: 'center',
     paddingHorizontal: 24,
-    zIndex: 20,
-  },
-  idleBottomContainer: {
-    width: '100%',
-    alignItems: 'center',
+    zIndex: 25,
   },
   shutterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    maxWidth: 300,
-    paddingHorizontal: 10,
+    maxWidth: 280,
   },
   sideControlBtn: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   sideControlBtnText: {
-    fontSize: 10,
+    fontSize: 9.5,
     color: '#FFFFFF',
     fontWeight: '700',
     marginTop: 2,
   },
-  shutterOuterRing: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 4,
-    borderColor: '#FFFFFF',
+  shutterBlueRing: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 5.5,
+    borderColor: '#1E6CEF',
+    backgroundColor: 'rgba(30, 108, 239, 0.26)',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.42,
+    shadowRadius: 8,
+    elevation: 6,
   },
-  shutterInnerButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+  shutterWhiteCore: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   resultBtns: {
     flexDirection: 'row',
@@ -839,7 +1040,7 @@ const styles = StyleSheet.create({
   retryBtnTxt: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#2373F4',
+    color: '#1E6CEF',
   },
   homeBtn: {
     flex: 1,

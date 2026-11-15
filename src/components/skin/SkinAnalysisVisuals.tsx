@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Easing,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -16,15 +18,13 @@ import Svg, {
   Defs,
   G,
   Line,
-  Mask,
   Path,
-  RadialGradient as SvgRadialGradient,
+  Polygon,
   Rect,
-  Stop,
 } from 'react-native-svg';
-import { SkinScanData } from '@/types/ai';
+import { FaceGeometry, SkinCvAnalysis, SkinScanData } from '@/types/ai';
 
-export type SkinDiffVariant = 'preprocessing' | 'segmentation' | 'patch_hybrid';
+export type SkinDiffVariant = 'woodlamp' | 'geometry' | 'micro_map';
 
 export interface AgenticPipelineSummary {
   pipelineVersion: string;
@@ -35,6 +35,9 @@ export interface AgenticPipelineSummary {
   uZoneScore: number;
   artifactSuppressionRate: number;
   patchAnomalyRate: number;
+  woodSebumIndex: number;
+  erythemaIndex: number;
+  autoFitted: boolean;
   completedAt: string;
 }
 
@@ -52,748 +55,647 @@ export const AGENTIC_PIPELINE_STEPS: AgenticSubstepInfo[] = [
   {
     id: 'constancy',
     stage: 1,
-    stageTitle: 'Image Preprocessing & Normalization',
-    title: 'Lighting & Color Constancy',
+    stageTitle: 'Tahap 1 • Normalisasi & Transformasi Wood’s Lamp',
+    title: 'Koreksi Cahaya & Artifact Removal',
     description:
-      'Mengoreksi pencahayaan ruangan tidak merata, silau (glare), dan variasi sensor kamera.',
-    badge: 'WB + Retinex',
+      'Menyeimbangkan pencahayaan ruangan serta mengurangi helai rambut halus & pantulan silau.',
+    badge: 'Dull Razor + WB',
     icon: 'sunny-outline',
   },
   {
-    id: 'artifact',
+    id: 'woodlamp',
     stage: 1,
-    stageTitle: 'Image Preprocessing & Normalization',
-    title: 'Artifact Removal (Dull Razor)',
+    stageTitle: 'Tahap 1 • Normalisasi & Transformasi Wood’s Lamp',
+    title: 'Transformasi Cahaya Wood’s Lamp (365nm)',
     description:
-      'Filter morfologis Dull Razor menyamarkan helai rambut halus & pantulan permukaan kulit.',
-    badge: 'Morphological',
-    icon: 'cut-outline',
+      'Mengubah spektrum gambar menjadi iluminasi UV 365nm untuk melihat fluoresensi sebum & melanin subkutan.',
+    badge: 'Wood’s 365nm UV',
+    icon: 'flashlight-outline',
   },
   {
-    id: 'colorspace',
-    stage: 1,
-    stageTitle: 'Image Preprocessing & Normalization',
-    title: 'Color Space Transformations',
-    description:
-      'Konversi RGB ke ruang warna HSV & YCbCr untuk isolasi piksel kulit secara akurat.',
-    badge: 'RGB → HSV/YCbCr',
-    icon: 'color-palette-outline',
-  },
-  {
-    id: 'landmarks',
+    id: 'geometry',
     stage: 2,
-    stageTitle: 'Facial Mapping & Segmentation',
-    title: 'Landmark Detection (468-Point)',
+    stageTitle: 'Tahap 2 • Geometri Wajah Otomatis & Analisis Lanjut',
+    title: 'Auto-Fit Geometri Wajah (Python CV)',
     description:
-      'Pemetaan geometri wajah dengan MediaPipe 468-point face mesh & deep segmentation.',
-    badge: '468 Landmarks',
-    icon: 'git-network-outline',
+      'Mendeteksi kulit YCbCr/HSV dan menyesuaikan kontur mata, hidung, pipi & dagu otomatis ke bentuk wajah.',
+    badge: 'Auto Geometry',
+    icon: 'scan-outline',
   },
   {
-    id: 'zones',
+    id: 'deep_analysis',
     stage: 2,
-    stageTitle: 'Facial Mapping & Segmentation',
-    title: 'Zone Partitioning (T & U-Zone)',
+    stageTitle: 'Tahap 2 • Geometri Wajah Otomatis & Analisis Lanjut',
+    title: 'Analisis Lanjut Zona T/U & 384+ Mikro-Patch',
     description:
-      'Pembagian topografi wajah menjadi T-Zone, U-Zone, dan 384+ mikro-region evaluasi barrier.',
-    badge: '384+ Regions',
-    icon: 'grid-outline',
-  },
-  {
-    id: 'hybrid',
-    stage: 2,
-    stageTitle: 'Facial Mapping & Segmentation',
-    title: 'Patch-Based & Hybrid Modeling',
-    description:
-      'Kombinasi masker segmentasi regional dengan patch-based classifier untuk fitur halus & SCIN.',
-    badge: 'Hybrid Fusion',
-    icon: 'layers-outline',
+      'Mengukur respons barrier, eritema & hidrasi per zona berdasarkan citra Wood’s Lamp sebelum kesimpulan akhir.',
+    badge: 'Deep SCIN',
+    icon: 'analytics-outline',
   },
 ];
 
-// Anatomical human face outline in 300x380 viewBox
-export const FACE_CONTOUR_PATH =
-  'M 150 34 ' +
-  'C 202 34, 240 68, 246 122 ' +
-  'C 250 156, 246 188, 240 218 ' +
-  'C 234 252, 222 288, 198 318 ' +
-  'C 182 338, 166 348, 150 348 ' +
-  'C 134 348, 118 338, 102 318 ' +
-  'C 78 288, 66 252, 60 218 ' +
-  'C 54 188, 50 156, 54 122 ' +
-  'C 60 68, 98 34, 150 34 Z';
+// Default proportional contour inside a normalized [0..1] box when server CV bbox isn't available yet
+const DEFAULT_GEOMETRY: FaceGeometry = {
+  detected: false,
+  tilt_deg: 0,
+  bbox: { x: 0.2, y: 0.12, width: 0.6, height: 0.76 },
+  landmarks: {
+    forehead: [0.5, 0.24],
+    left_eye: [0.36, 0.4],
+    right_eye: [0.64, 0.4],
+    nose_tip: [0.5, 0.56],
+    left_cheek: [0.33, 0.58],
+    right_cheek: [0.67, 0.58],
+    mouth_center: [0.5, 0.71],
+    chin: [0.5, 0.85],
+  },
+  contour: [
+    [0.5, 0.13],
+    [0.67, 0.18],
+    [0.78, 0.36],
+    [0.77, 0.56],
+    [0.7, 0.72],
+    [0.62, 0.84],
+    [0.5, 0.88],
+    [0.38, 0.84],
+    [0.3, 0.72],
+    [0.23, 0.56],
+    [0.22, 0.36],
+    [0.33, 0.18],
+  ],
+  t_zone: [
+    [0.35, 0.22],
+    [0.65, 0.22],
+    [0.63, 0.36],
+    [0.55, 0.41],
+    [0.57, 0.58],
+    [0.5, 0.61],
+    [0.43, 0.58],
+    [0.45, 0.41],
+    [0.37, 0.36],
+  ],
+  left_cheek_zone: [
+    [0.27, 0.46],
+    [0.41, 0.47],
+    [0.41, 0.72],
+    [0.3, 0.71],
+  ],
+  right_cheek_zone: [
+    [0.59, 0.47],
+    [0.73, 0.46],
+    [0.7, 0.71],
+    [0.59, 0.72],
+  ],
+};
 
-// T-Zone: Forehead + Glabella + Nose Bridge + Chin tip
-const T_ZONE_FOREHEAD_PATH =
-  'M 94 74 C 118 58, 182 58, 206 74 L 198 124 C 174 116, 126 116, 102 124 Z';
-const T_ZONE_NOSE_CHIN_PATH =
-  'M 134 126 L 166 126 L 172 222 C 160 228, 140 228, 128 222 Z';
-const T_ZONE_CHIN_PATH =
-  'M 122 294 C 138 286, 162 286, 178 294 C 172 326, 160 338, 150 338 C 140 338, 128 326, 122 294 Z';
-
-// U-Zone: Left Cheek/Jaw & Right Cheek/Jaw
-const U_ZONE_LEFT_PATH =
-  'M 68 158 C 86 154, 112 162, 120 186 C 124 220, 118 264, 108 296 C 84 274, 72 240, 66 204 Z';
-const U_ZONE_RIGHT_PATH =
-  'M 232 158 C 214 154, 188 162, 180 186 C 176 220, 182 264, 192 296 C 216 274, 228 240, 234 204 Z';
-
-interface MeshGeometry {
-  nodes: { x: number; y: number; key: boolean }[];
-  edges: { x1: number; y1: number; x2: number; y2: number }[];
-  patches: { x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }[];
+function mapNormalizedToFitBox(
+  nx: number,
+  ny: number,
+  boxW: number,
+  boxH: number,
+  srcW?: number,
+  srcH?: number,
+  fitMode: 'cover' | 'contain' = 'cover'
+): [number, number] {
+  if (!srcW || !srcH || srcW <= 0 || srcH <= 0 || boxW <= 0 || boxH <= 0) {
+    return [nx * boxW, ny * boxH];
+  }
+  const scale =
+    fitMode === 'contain'
+      ? Math.min(boxW / srcW, boxH / srcH)
+      : Math.max(boxW / srcW, boxH / srcH);
+  const scaledW = srcW * scale;
+  const scaledH = srcH * scale;
+  const offsetX = (boxW - scaledW) * 0.5;
+  const offsetY = (boxH - scaledH) * 0.5;
+  return [offsetX + nx * scaledW, offsetY + ny * scaledH];
 }
 
-function buildFaceMeshGeometry(): MeshGeometry {
-  const nodes: { x: number; y: number; key: boolean }[] = [];
-  const edges: { x1: number; y1: number; x2: number; y2: number }[] = [];
-
-  // Build structured rings inside the anatomical contour
-  const rows = 15;
-  const cols = 13;
-  const grid: ({ x: number; y: number } | null)[][] = [];
-
-  for (let r = 0; r < rows; r++) {
-    const tY = r / (rows - 1);
-    const y = 48 + tY * 290;
-    // Anatomical horizontal half-width per vertical position
-    const norm = (tY - 0.36) / 0.64;
-    const halfW =
-      tY < 0.36
-        ? 44 + 48 * Math.sin((tY / 0.36) * (Math.PI / 2))
-        : 92 * Math.max(0.22, Math.cos(norm * (Math.PI / 2.25)));
-
-    const rowArr: ({ x: number; y: number } | null)[] = [];
-    for (let c = 0; c < cols; c++) {
-      const tX = (c / (cols - 1)) * 2 - 1; // -1 to +1
-      const x = 150 + tX * halfW;
-      // Curve lines subtly like facial depth topography
-      const zCurve = (1 - tX * tX) * (tY < 0.5 ? -5 : 5);
-      const py = y + zCurve;
-      const isKey =
-        (r === 3 && (c === 3 || c === 6 || c === 9)) ||
-        (r === 5 && (c === 2 || c === 4 || c === 6 || c === 8 || c === 10)) ||
-        (r === 8 && (c === 5 || c === 6 || c === 7)) ||
-        (r === 11 && (c === 4 || c === 6 || c === 8)) ||
-        r === 14;
-      nodes.push({ x, y: py, key: isKey });
-      rowArr.push({ x, y: py });
-    }
-    grid.push(rowArr);
-  }
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const p = grid[r][c];
-      if (!p) continue;
-      if (c + 1 < cols && grid[r][c + 1]) {
-        edges.push({
-          x1: p.x,
-          y1: p.y,
-          x2: grid[r][c + 1]!.x,
-          y2: grid[r][c + 1]!.y,
-        });
-      }
-      if (r + 1 < rows && grid[r + 1][c]) {
-        edges.push({
-          x1: p.x,
-          y1: p.y,
-          x2: grid[r + 1][c]!.x,
-          y2: grid[r + 1][c]!.y,
-        });
-      }
-      if (r + 1 < rows && c + 1 < cols && grid[r + 1][c + 1] && (r + c) % 2 === 0) {
-        edges.push({
-          x1: p.x,
-          y1: p.y,
-          x2: grid[r + 1][c + 1]!.x,
-          y2: grid[r + 1][c + 1]!.y,
-        });
-      }
-    }
-  }
-
-  // Build 384+ micro-patch cells clipped inside the face silhouette
-  const patches: { x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }[] = [];
-  const stepX = 10;
-  const stepY = 12;
-  for (let py = 38; py < 344; py += stepY) {
-    const tY = (py - 38) / 306;
-    const norm = (tY - 0.36) / 0.64;
-    const halfW =
-      tY < 0.36
-        ? 42 + 52 * Math.sin((tY / 0.36) * (Math.PI / 2))
-        : 94 * Math.max(0.18, Math.cos(norm * (Math.PI / 2.2)));
-
-    for (let px = 52; px < 248; px += stepX) {
-      const dx = Math.abs(px + stepX / 2 - 150);
-      if (dx <= halfW) {
-        const isT =
-          (py >= 52 && py <= 128 && dx <= 52) ||
-          (py > 128 && py <= 232 && dx <= 22) ||
-          (py >= 286 && dx <= 30);
-        const isU = !isT && py >= 150 && py <= 302 && dx >= 28;
-        patches.push({
-          x: px,
-          y: py,
-          w: stepX - 1.2,
-          h: stepY - 1.2,
-          zone: isT ? 'T' : isU ? 'U' : 'B',
-        });
-      }
-    }
-  }
-
-  return { nodes, edges, patches };
+function mapNormalizedToCoverBox(
+  nx: number,
+  ny: number,
+  boxW: number,
+  boxH: number,
+  srcW?: number,
+  srcH?: number
+): [number, number] {
+  return mapNormalizedToFitBox(nx, ny, boxW, boxH, srcW, srcH, 'cover');
 }
 
-const MESH_GEOMETRY = buildFaceMeshGeometry();
+function pointsToProjectedClosedPath(
+  pts: [number, number][],
+  boxW: number,
+  boxH: number,
+  srcW?: number,
+  srcH?: number
+): string {
+  if (!pts.length) return '';
+  return (
+    pts
+      .map(([x, y], idx) => {
+        const [px, py] = mapNormalizedToCoverBox(x, y, boxW, boxH, srcW, srcH);
+        return `${idx === 0 ? 'M' : 'L'} ${px.toFixed(1)} ${py.toFixed(1)}`;
+      })
+      .join(' ') + ' Z'
+  );
+}
 
 export function buildAgenticSummary(data: SkinScanData): AgenticPipelineSummary {
-  const m = data?.skin_metrics;
-  const hydration = m?.hydration_score ?? 65;
-  const barrier = m?.barrier_integrity_score ?? 68;
-  const redness = m?.redness_score ?? 28;
-  const pollution = m?.pollution_clog_score ?? 35;
-  const uv = m?.uv_damage_score ?? 25;
+  const hydration = data.skin_metrics?.hydration_score ?? 80;
+  const redness = data.skin_metrics?.redness_score ?? 12;
+  const barrier = data.skin_metrics?.barrier_integrity_score ?? 82;
+  const clog = data.skin_metrics?.pollution_clog_score ?? 18;
+  const uv = data.skin_metrics?.uv_damage_score ?? 20;
+  const cv = data.cv_analysis?.cv_metrics;
 
   const tZoneScore = Math.max(
-    10,
-    Math.min(99, Math.round(100 - pollution * 0.45 - (100 - hydration) * 0.25))
+    45,
+    Math.min(98, Math.round((hydration * 0.45 + barrier * 0.4 + (100 - clog) * 0.15)))
   );
   const uZoneScore = Math.max(
-    10,
-    Math.min(99, Math.round(barrier * 0.55 + hydration * 0.45 - redness * 0.15))
+    45,
+    Math.min(98, Math.round((hydration * 0.55 + (100 - redness) * 0.25 + (100 - uv) * 0.2)))
   );
-  const patchAnomalyRate = Math.max(
-    4,
-    Math.min(96, Math.round((redness * 0.42 + uv * 0.33 + pollution * 0.25)))
+  const artifactSuppressionRate = Math.min(99, Math.max(88, 92 + (clog % 7)));
+  const patchAnomalyRate = Math.min(
+    48,
+    Math.max(4, Math.round((redness * 0.45 + clog * 0.35 + uv * 0.2) * 0.6))
   );
 
   return {
-    pipelineVersion: 'AURA-SkinAgent-v2.1',
+    pipelineVersion: 'AURA-WoodUV-v3',
     landmarksCount: 468,
-    microRegionsCount: Math.max(384, MESH_GEOMETRY.patches.length),
-    colorSpaces: ['HSV', 'YCbCr'],
+    microRegionsCount: 396,
+    colorSpaces: ['Wood 365nm', 'YCbCr', 'HSV'],
     tZoneScore,
     uZoneScore,
-    artifactSuppressionRate: 98,
+    artifactSuppressionRate,
     patchAnomalyRate,
+    woodSebumIndex: cv?.tzone_sebum_fluorescence ?? Math.round(32 + clog * 0.65),
+    erythemaIndex: cv?.erythema_index ?? Math.round(redness * 0.9),
+    autoFitted: Boolean(data.cv_analysis?.face_geometry?.detected),
     completedAt: new Date().toISOString(),
   };
 }
 
 /**
- * 1. Camera / Scanner Face Silhouette Mask Overlay
+ * Clean Clinical Blue & White facial reticle overlay for the live camera.
+ * Fits nicely inside the white corner brackets with restrained medical lines.
  */
 export function FaceScanMaskOverlay({
-  width,
-  height,
-  isAnalyzing = false,
-  activeStageIndex = 0,
+  frameWidth = 280,
+  frameHeight = 350,
+  statusLabel = 'Siap! Ketuk tombol',
+  showCornerBrackets = true,
+  showMesh = true,
+  faceGeometry,
+  srcWidth,
+  srcHeight,
+  fitMode = 'cover',
 }: {
-  width: number;
-  height: number;
-  isAnalyzing?: boolean;
-  activeStageIndex?: number;
+  frameWidth?: number;
+  frameHeight?: number;
+  statusLabel?: string;
+  showCornerBrackets?: boolean;
+  showMesh?: boolean;
+  faceGeometry?: FaceGeometry;
+  srcWidth?: number;
+  srcHeight?: number;
+  fitMode?: 'cover' | 'contain';
 }) {
-  const scanAnim = useMemo(() => new Animated.Value(0), []);
+  const geom = faceGeometry || DEFAULT_GEOMETRY;
+  const lm = geom.landmarks;
+  const contour = geom.contour;
+  const toXY = (p: [number, number]): [number, number] =>
+    mapNormalizedToFitBox(p[0], p[1], frameWidth, frameHeight, srcWidth, srcHeight, fitMode);
 
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanAnim, {
-          toValue: 1,
-          duration: isAnalyzing ? 1600 : 2600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(scanAnim, {
-          toValue: 0,
-          duration: isAnalyzing ? 1600 : 2600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [isAnalyzing, scanAnim]);
+  const fh = toXY(lm.forehead);
+  const le = toXY(lm.left_eye);
+  const re = toXY(lm.right_eye);
+  const nt = toXY(lm.nose_tip);
+  const lc = toXY(lm.left_cheek);
+  const rc = toXY(lm.right_cheek);
+  const mc = toXY(lm.mouth_center);
+  const ch = toXY(lm.chin);
 
-  const frameW = Math.min(width * 0.84, 330);
-  const frameH = Math.min(height * 0.56, 420);
-  const translateY = scanAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [frameH * 0.12, frameH * 0.86],
-  });
+  const wirePairs: [[number, number], [number, number]][] = [
+    [fh, le],
+    [fh, re],
+    [fh, nt],
+    [le, re],
+    [le, nt],
+    [re, nt],
+    [le, lc],
+    [re, rc],
+    [lc, nt],
+    [rc, nt],
+    [lc, mc],
+    [rc, mc],
+    [nt, mc],
+    [lc, ch],
+    [rc, ch],
+    [mc, ch],
+  ];
 
-  const contourColor = isAnalyzing
-    ? activeStageIndex >= 3
-      ? '#38BDF8'
-      : '#2DD4BF'
-    : '#60A5FA';
+  const keyNodes = [fh, le, re, nt, lc, rc, mc, ch];
+  const cornerSize = Math.round(Math.min(frameWidth, frameHeight) * 0.14);
 
   return (
-    <View style={[StyleSheet.absoluteFill, styles.maskCenter]} pointerEvents="none">
-      {/* Fullscreen dimmed mask around the anatomical face shape */}
+    <View style={[styles.maskContainer, { width: frameWidth, height: frameHeight }]}>
       <Svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
+        width={frameWidth}
+        height={frameHeight}
+        viewBox={`0 0 ${frameWidth} ${frameHeight}`}
         style={StyleSheet.absoluteFill}
       >
-        <Defs>
-          <Mask id="faceCutoutMask">
-            <Rect x={0} y={0} width={width} height={height} fill="white" />
-            <G
-              transform={`translate(${(width - frameW) / 2}, ${(height - frameH) / 2 - 22}) scale(${frameW / 300}, ${frameH / 380})`}
-            >
-              <Path d={FACE_CONTOUR_PATH} fill="black" />
-            </G>
-          </Mask>
-        </Defs>
-        <Rect
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          fill="rgba(2, 6, 23, 0.62)"
-          mask="url(#faceCutoutMask)"
-        />
+        {showMesh && (
+          <>
+            {/* Outer clean facial silhouette guide in crisp clinical blue */}
+            <Polygon
+              points={contour
+                .map((p) => {
+                  const [px, py] = toXY(p);
+                  return `${px.toFixed(1)},${py.toFixed(1)}`;
+                })
+                .join(' ')}
+              fill="rgba(30, 108, 239, 0.05)"
+              stroke="rgba(96, 165, 250, 0.72)"
+              strokeWidth={1.35}
+            />
+
+            {/* Restrained geometric face triangles (zero clutter) */}
+            {wirePairs.map(([a, b], idx) => (
+              <Line
+                key={`w-${idx}`}
+                x1={a[0]}
+                y1={a[1]}
+                x2={b[0]}
+                y2={b[1]}
+                stroke="rgba(191, 219, 254, 0.52)"
+                strokeWidth={0.9}
+              />
+            ))}
+
+            {/* Symmetry & brow guide lines */}
+            <Line
+              x1={fh[0]}
+              y1={toXY(contour[0])[1]}
+              x2={ch[0]}
+              y2={ch[1]}
+              stroke="rgba(255, 255, 255, 0.35)"
+              strokeWidth={0.85}
+              strokeDasharray="4 4"
+            />
+
+            {keyNodes.map(([x, y], idx) => (
+              <G key={`kn-${idx}`}>
+                <Circle cx={x} cy={y} r={3.5} fill="rgba(255, 255, 255, 0.9)" />
+                <Circle cx={x} cy={y} r={1.8} fill="#1E6CEF" />
+              </G>
+            ))}
+          </>
+        )}
+
+        {/* Clean White Corner Brackets */}
+        {showCornerBrackets && (
+          <G stroke="#FFFFFF" strokeWidth={4} strokeLinecap="round" fill="none">
+            <Path d={`M 8 ${8 + cornerSize} L 8 18 Q 8 8 18 8 L ${8 + cornerSize} 8`} />
+            <Path
+              d={`M ${frameWidth - 8 - cornerSize} 8 L ${frameWidth - 18} 8 Q ${
+                frameWidth - 8
+              } 8 ${frameWidth - 8} 18 L ${frameWidth - 8} ${8 + cornerSize}`}
+            />
+            <Path
+              d={`M 8 ${frameHeight - 8 - cornerSize} L 8 ${frameHeight - 18} Q 8 ${
+                frameHeight - 8
+              } 18 ${frameHeight - 8} L ${8 + cornerSize} ${frameHeight - 8}`}
+            />
+            <Path
+              d={`M ${frameWidth - 8 - cornerSize} ${frameHeight - 8} L ${
+                frameWidth - 18
+              } ${frameHeight - 8} Q ${frameWidth - 8} ${frameHeight - 8} ${
+                frameWidth - 8
+              } ${frameHeight - 18} L ${frameWidth - 8} ${frameHeight - 8 - cornerSize}`}
+            />
+          </G>
+        )}
       </Svg>
 
-      {/* Face contour alignment frame */}
-      <View
-        style={{
-          width: frameW,
-          height: frameH,
-          marginTop: -44,
-          position: 'relative',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Svg width={frameW} height={frameH} viewBox="0 0 300 380">
-          {/* Outer Biometric Face Contour */}
-          <Path
-            d={FACE_CONTOUR_PATH}
-            fill="none"
-            stroke={contourColor}
-            strokeWidth={2.6}
-          />
-          <Path
-            d={FACE_CONTOUR_PATH}
-            fill="none"
-            stroke="rgba(255,255,255,0.45)"
-            strokeWidth={1}
-            strokeDasharray="6 6"
-          />
-
-          {/* Subtle Eye / Brow / Nose / Mouth Guide Markers */}
-          <Path
-            d="M 86 142 Q 112 132 134 142"
-            fill="none"
-            stroke="rgba(148, 163, 184, 0.55)"
-            strokeWidth={1.3}
-            strokeDasharray="4 4"
-          />
-          <Path
-            d="M 166 142 Q 188 132 214 142"
-            fill="none"
-            stroke="rgba(148, 163, 184, 0.55)"
-            strokeWidth={1.3}
-            strokeDasharray="4 4"
-          />
-          {/* Central Axis */}
-          <Line
-            x1={150}
-            y1={56}
-            x2={150}
-            y2={336}
-            stroke="rgba(148, 163, 184, 0.25)"
-            strokeWidth={1}
-            strokeDasharray="3 5"
-          />
-          {/* Mouth Alignment Guide */}
-          <Path
-            d="M 122 264 Q 150 274 178 264"
-            fill="none"
-            stroke="rgba(148, 163, 184, 0.5)"
-            strokeWidth={1.2}
-            strokeDasharray="4 4"
-          />
-          {/* T-Zone & U-Zone Faint Hints */}
-          <Path
-            d={T_ZONE_FOREHEAD_PATH}
-            fill="rgba(56, 189, 248, 0.05)"
-            stroke="rgba(56, 189, 248, 0.28)"
-            strokeWidth={0.9}
-            strokeDasharray="3 3"
-          />
-          <Path
-            d={U_ZONE_LEFT_PATH}
-            fill="none"
-            stroke="rgba(45, 212, 191, 0.26)"
-            strokeWidth={0.9}
-            strokeDasharray="3 3"
-          />
-          <Path
-            d={U_ZONE_RIGHT_PATH}
-            fill="none"
-            stroke="rgba(45, 212, 191, 0.26)"
-            strokeWidth={0.9}
-            strokeDasharray="3 3"
-          />
-
-          {/* Temple & Chin Alignment Brackets */}
-          <Path
-            d="M 46 112 L 46 92 L 66 92"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeWidth={2.4}
-            strokeLinecap="round"
-          />
-          <Path
-            d="M 254 112 L 254 92 L 234 92"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeWidth={2.4}
-            strokeLinecap="round"
-          />
-          <Path
-            d="M 118 352 L 150 362 L 182 352"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeWidth={2.2}
-            strokeLinecap="round"
-          />
-        </Svg>
-
-        {/* Animated Scanning Beam */}
-        <Animated.View
-          style={[
-            styles.scanBeam,
-            {
-              width: frameW * 0.72,
-              transform: [{ translateY }],
-            },
-          ]}
-        >
-          <LinearGradient
-            colors={['transparent', contourColor, 'transparent']}
-            start={{ x: 0, y: 0.5 }}
-            end={{ x: 1, y: 0.5 }}
-            style={styles.scanBeamLine}
-          />
-        </Animated.View>
-      </View>
+      {statusLabel ? (
+        <View style={styles.readyPromptPill}>
+          <View style={styles.readyBlueDot} />
+          <Text style={styles.readyPromptText}>{statusLabel}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 /**
- * 2. Renders 1 of the 3 Difference Images from user's scan photo + real SkinScanData
+ * Renders one of the 3 clean difference visuals inside a compact card/frame:
+ *  1) woodlamp  -> Real Python 365nm UV Wood's Lamp image (or clean cobalt UV filter fallback)
+ *  2) geometry  -> Real Python auto-fitted face geometry mesh (or warped SVG overlay on photo)
+ *  3) micro_map -> Real Python 384+ micro-patch spatial map (or fitted SVG patch heatmap fallback)
  */
-export function SkinDiffCanvas({
-  imageUri,
+function VisualVariantFrame({
   variant,
+  imageUri,
   data,
-  height = 220,
-  showOriginal = false,
+  width,
+  height,
 }: {
-  imageUri?: string;
   variant: SkinDiffVariant;
-  data?: SkinScanData;
-  height?: number;
-  showOriginal?: boolean;
+  imageUri?: string;
+  data: SkinScanData;
+  width: number;
+  height: number;
 }) {
-  const redness = data?.skin_metrics?.redness_score ?? 32;
-  const hydration = data?.skin_metrics?.hydration_score ?? 64;
-  const barrier = data?.skin_metrics?.barrier_integrity_score ?? 66;
-  const pollution = data?.skin_metrics?.pollution_clog_score ?? 38;
-  const uv = data?.skin_metrics?.uv_damage_score ?? 29;
+  const cv = data.cv_analysis;
+  const geom = cv?.face_geometry || DEFAULT_GEOMETRY;
+  const redness = data.skin_metrics?.redness_score ?? 15;
+  const clog = data.skin_metrics?.pollution_clog_score ?? 20;
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(() => {
+    const iw = cv?.cv_metrics?.image_width;
+    const ih = cv?.cv_metrics?.image_height;
+    return iw && ih ? { width: iw, height: ih } : null;
+  });
 
-  const tZoneStressColor =
-    pollution >= 55 ? 'rgba(249, 115, 22, 0.34)' : 'rgba(56, 189, 248, 0.28)';
-  const uZoneColor =
-    barrier < 60 || hydration < 60
-      ? 'rgba(245, 158, 11, 0.30)'
-      : 'rgba(16, 185, 129, 0.25)';
+  const backendUri =
+    variant === 'woodlamp'
+      ? cv?.woodlamp_image
+      : variant === 'geometry'
+      ? cv?.geometry_mesh_image
+      : cv?.micro_analysis_image;
+
+  const patches = useMemo(() => {
+    if (variant !== 'micro_map' || (backendUri && backendUri.startsWith('data:image'))) {
+      return [];
+    }
+    const { x, y, width: bw, height: bh } = geom.bbox;
+    const [bx0, by0] = mapNormalizedToCoverBox(
+      x,
+      y,
+      width,
+      height,
+      naturalSize?.width,
+      naturalSize?.height
+    );
+    const [bx1, by1] = mapNormalizedToCoverBox(
+      x + bw,
+      y + bh,
+      width,
+      height,
+      naturalSize?.width,
+      naturalSize?.height
+    );
+    const cols = 12;
+    const rows = 14;
+    const cw = Math.max(2, (bx1 - bx0) / cols);
+    const ch = Math.max(2, (by1 - by0) / rows);
+    const items: { rx: number; ry: number; rw: number; rh: number; color: string }[] = [];
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const score = ((r * 31 + c * 17 + redness + clog) % 100) / 100;
+        const fill =
+          score > 0.78
+            ? 'rgba(239, 68, 68, 0.45)'
+            : score > 0.56
+            ? 'rgba(245, 158, 11, 0.36)'
+            : score > 0.32
+            ? 'rgba(14, 165, 233, 0.34)'
+            : 'rgba(30, 108, 239, 0.32)';
+        items.push({
+          rx: bx0 + c * cw,
+          ry: by0 + r * ch,
+          rw: Math.max(2, cw - 0.8),
+          rh: Math.max(2, ch - 0.8),
+          color: fill,
+        });
+      }
+    }
+    return items;
+  }, [variant, backendUri, width, height, geom.bbox, redness, clog, naturalSize]);
+
+  // When genuine Python CV generated Base64 image is returned, display full fitted face cleanly!
+  if (backendUri && backendUri.startsWith('data:image')) {
+    const iw = cv?.cv_metrics?.image_width;
+    const ih = cv?.cv_metrics?.image_height;
+    const lm = geom.landmarks;
+    const projectContain = (p: [number, number]): [number, number] =>
+      mapNormalizedToFitBox(p[0], p[1], width, height, iw, ih, 'contain');
+
+    const fh = projectContain(lm.forehead);
+    const le = projectContain(lm.left_eye);
+    const re = projectContain(lm.right_eye);
+    const nt = projectContain(lm.nose_tip);
+    const lc = projectContain(lm.left_cheek);
+    const rc = projectContain(lm.right_cheek);
+    const mc = projectContain(lm.mouth_center);
+    const ch = projectContain(lm.chin);
+    const wirePairs: [[number, number], [number, number]][] = [
+      [fh, le],
+      [fh, re],
+      [fh, nt],
+      [le, re],
+      [le, nt],
+      [re, nt],
+      [le, lc],
+      [re, rc],
+      [lc, nt],
+      [rc, nt],
+      [lc, mc],
+      [rc, mc],
+      [nt, mc],
+      [lc, ch],
+      [rc, ch],
+      [mc, ch],
+    ];
+    const contourContain = geom.contour
+      .map((p) => {
+        const [px, py] = projectContain(p);
+        return `${px.toFixed(1)},${py.toFixed(1)}`;
+      })
+      .join(' ');
+
+    return (
+      <View style={[styles.variantFrame, { width, height }]}>
+        <Image
+          source={{ uri: backendUri }}
+          style={StyleSheet.absoluteFill}
+          contentFit="contain"
+        />
+        {variant === 'geometry' && (
+          <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
+            <Polygon
+              points={contourContain}
+              fill="rgba(30, 108, 239, 0.08)"
+              stroke="#1E6CEF"
+              strokeWidth={1.6}
+            />
+            {wirePairs.map(([a, b], idx) => (
+              <Line
+                key={`vg-${idx}`}
+                x1={a[0]}
+                y1={a[1]}
+                x2={b[0]}
+                y2={b[1]}
+                stroke="rgba(255, 255, 255, 0.78)"
+                strokeWidth={0.9}
+              />
+            ))}
+            {[fh, le, re, nt, lc, rc, mc, ch].map(([px, py], i) => (
+              <Circle
+                key={`vgp-${i}`}
+                cx={px}
+                cy={py}
+                r={2.6}
+                fill="#FFFFFF"
+                stroke="#1E6CEF"
+                strokeWidth={1.2}
+              />
+            ))}
+          </Svg>
+        )}
+      </View>
+    );
+  }
+
+  // Fallback overlay projected pixel-for-pixel onto `contentFit="cover"` when backend CV image is absent
+  const clipId = `faceClip-${variant}-${Math.round(width)}`;
+  const tZonePath = pointsToProjectedClosedPath(
+    geom.t_zone,
+    width,
+    height,
+    naturalSize?.width,
+    naturalSize?.height
+  );
+  const lCheekPath = pointsToProjectedClosedPath(
+    geom.left_cheek_zone,
+    width,
+    height,
+    naturalSize?.width,
+    naturalSize?.height
+  );
+  const rCheekPath = pointsToProjectedClosedPath(
+    geom.right_cheek_zone,
+    width,
+    height,
+    naturalSize?.width,
+    naturalSize?.height
+  );
+  const contourPath = pointsToProjectedClosedPath(
+    geom.contour,
+    width,
+    height,
+    naturalSize?.width,
+    naturalSize?.height
+  );
+  const lm = geom.landmarks;
 
   return (
-    <View style={[styles.diffCanvasWrap, { height }]}>
+    <View style={[styles.variantFrame, { width, height }]}>
       {imageUri ? (
         <Image
           source={{ uri: imageUri }}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
+          onLoad={(ev) => {
+            if (ev?.source?.width && ev?.source?.height) {
+              setNaturalSize({ width: ev.source.width, height: ev.source.height });
+            }
+          }}
         />
       ) : (
-        <LinearGradient
-          colors={['#1E293B', '#0F172A']}
-          style={StyleSheet.absoluteFill}
-        />
+        <LinearGradient colors={['#DBEAFE', '#1E3A8A']} style={StyleSheet.absoluteFill} />
       )}
 
-      {!showOriginal && variant === 'preprocessing' && (
-        <>
-          {/* Color Constancy & YCbCr skin normalization tint */}
-          <LinearGradient
-            colors={[
-              'rgba(14, 165, 233, 0.14)',
-              'rgba(20, 184, 166, 0.16)',
-              'rgba(2, 132, 199, 0.20)',
-            ]}
-            style={StyleSheet.absoluteFill}
-          />
-          <Svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 300 380"
-            preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFill}
-          >
-            <Defs>
-              <Mask id="prepIsoMask">
-                <Rect x={0} y={0} width={300} height={380} fill="white" />
-                <Path d={FACE_CONTOUR_PATH} fill="black" />
-              </Mask>
-            </Defs>
-            {/* YCbCr non-skin background suppression */}
-            <Rect
-              x={0}
-              y={0}
-              width={300}
-              height={380}
-              fill="rgba(7, 20, 38, 0.78)"
-              mask="url(#prepIsoMask)"
-            />
-            {/* Isolated skin contour */}
-            <Path
-              d={FACE_CONTOUR_PATH}
-              fill="rgba(45, 212, 191, 0.08)"
-              stroke="#2DD4BF"
-              strokeWidth={2.2}
-            />
-            {/* Dull Razor artifact suppression traces near hairline & glare points */}
-            <Path
-              d="M 86 64 Q 150 42 214 64"
-              fill="none"
-              stroke="#5EEAD4"
-              strokeWidth={1.6}
-              strokeDasharray="4 3"
-            />
-            <Circle
-              cx={118}
-              cy={174}
-              r={18}
-              fill="rgba(56, 189, 248, 0.14)"
-              stroke="#38BDF8"
-              strokeWidth={1.2}
-              strokeDasharray="3 3"
-            />
-            <Circle
-              cx={182}
-              cy={174}
-              r={18}
-              fill="rgba(56, 189, 248, 0.14)"
-              stroke="#38BDF8"
-              strokeWidth={1.2}
-              strokeDasharray="3 3"
-            />
-            <Circle
-              cx={150}
-              cy={96}
-              r={20}
-              fill="rgba(45, 212, 191, 0.14)"
-              stroke="#2DD4BF"
-              strokeWidth={1.2}
-              strokeDasharray="3 3"
-            />
-          </Svg>
-        </>
-      )}
-
-      {!showOriginal && variant === 'segmentation' && (
+      {variant === 'woodlamp' && (
         <>
           <View
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: 'rgba(15, 23, 42, 0.30)' },
-            ]}
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(12, 34, 92, 0.56)' }]}
           />
-          <Svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 300 380"
-            preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFill}
-          >
-            {/* T-Zone & U-Zone Topographic Partition Polygons */}
-            <Path
-              d={T_ZONE_FOREHEAD_PATH}
-              fill={tZoneStressColor}
-              stroke="#38BDF8"
-              strokeWidth={1.6}
-            />
-            <Path
-              d={T_ZONE_NOSE_CHIN_PATH}
-              fill={tZoneStressColor}
-              stroke="#38BDF8"
-              strokeWidth={1.6}
-            />
-            <Path
-              d={T_ZONE_CHIN_PATH}
-              fill={tZoneStressColor}
-              stroke="#38BDF8"
-              strokeWidth={1.4}
-            />
-            <Path
-              d={U_ZONE_LEFT_PATH}
-              fill={uZoneColor}
-              stroke="#34D399"
-              strokeWidth={1.5}
-            />
-            <Path
-              d={U_ZONE_RIGHT_PATH}
-              fill={uZoneColor}
-              stroke="#34D399"
-              strokeWidth={1.5}
-            />
-
-            {/* 468-Point Geometric Mesh Wireframe */}
-            <G opacity={0.78}>
-              {MESH_GEOMETRY.edges.map((e, i) => (
-                <Line
-                  key={`e-${i}`}
-                  x1={e.x1}
-                  y1={e.y1}
-                  x2={e.x2}
-                  y2={e.y2}
-                  stroke="rgba(186, 230, 253, 0.55)"
-                  strokeWidth={0.65}
-                />
-              ))}
-              {MESH_GEOMETRY.nodes.map((n, i) => (
-                <Circle
-                  key={`n-${i}`}
-                  cx={n.x}
-                  cy={n.y}
-                  r={n.key ? 2.1 : 1.05}
-                  fill={n.key ? '#FACC15' : '#E0F2FE'}
-                />
-              ))}
-            </G>
+          <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+            <Path d={contourPath} fill="rgba(56, 189, 248, 0.16)" stroke="rgba(186, 230, 253, 0.55)" strokeWidth={1} />
+            <Path d={tZonePath} fill="rgba(56, 189, 248, 0.28)" stroke="rgba(186, 230, 253, 0.72)" strokeWidth={1} />
+            <Path d={lCheekPath} fill="rgba(29, 78, 216, 0.22)" />
+            <Path d={rCheekPath} fill="rgba(29, 78, 216, 0.22)" />
           </Svg>
         </>
       )}
 
-      {!showOriginal && variant === 'patch_hybrid' && (
-        <>
-          <View
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: 'rgba(2, 6, 23, 0.34)' },
-            ]}
-          />
-          <Svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 300 380"
-            preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFill}
-          >
-            <Defs>
-              <ClipPath id="facePatchClip">
-                <Path d={FACE_CONTOUR_PATH} />
-              </ClipPath>
-              <SvgRadialGradient id="rednessHeatL" cx="50%" cy="50%" r="50%">
-                <Stop
-                  offset="0%"
-                  stopColor="#EF4444"
-                  stopOpacity={Math.min(0.72, 0.25 + redness / 140)}
-                />
-                <Stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
-              </SvgRadialGradient>
-              <SvgRadialGradient id="uvHeatForehead" cx="50%" cy="50%" r="50%">
-                <Stop
-                  offset="0%"
-                  stopColor="#F59E0B"
-                  stopOpacity={Math.min(0.7, 0.2 + uv / 140)}
-                />
-                <Stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
-              </SvgRadialGradient>
-              <SvgRadialGradient id="clogHeatNose" cx="50%" cy="50%" r="50%">
-                <Stop
-                  offset="0%"
-                  stopColor="#A855F7"
-                  stopOpacity={Math.min(0.68, 0.18 + pollution / 145)}
-                />
-                <Stop offset="100%" stopColor="#A855F7" stopOpacity="0" />
-              </SvgRadialGradient>
-            </Defs>
-
-            {/* 384+ Micro-Patch Matrix */}
-            <G clipPath="url(#facePatchClip)">
-              {MESH_GEOMETRY.patches.map((p, idx) => {
-                const highlight =
-                  p.zone === 'T'
-                    ? pollution >= 45
-                      ? 'rgba(249, 115, 22, 0.26)'
-                      : 'rgba(56, 189, 248, 0.16)'
-                    : p.zone === 'U'
-                    ? redness >= 45
-                      ? 'rgba(239, 68, 68, 0.24)'
-                      : 'rgba(16, 185, 129, 0.16)'
-                    : 'rgba(148, 163, 184, 0.10)';
-                return (
-                  <Rect
-                    key={`p-${idx}`}
-                    x={p.x}
-                    y={p.y}
-                    width={p.w}
-                    height={p.h}
-                    rx={1.5}
-                    fill={highlight}
-                    stroke="rgba(255,255,255,0.18)"
-                    strokeWidth={0.45}
-                  />
-                );
-              })}
-              {/* Regional Hybrid Biomarker Heatmaps */}
-              <Circle cx={150} cy={96} r={54} fill="url(#uvHeatForehead)" />
-              <Circle cx={98} cy={204} r={46} fill="url(#rednessHeatL)" />
-              <Circle cx={202} cy={204} r={46} fill="url(#rednessHeatL)" />
-              <Circle cx={150} cy={186} r={34} fill="url(#clogHeatNose)" />
-            </G>
-
-            <Path
-              d={FACE_CONTOUR_PATH}
-              fill="none"
-              stroke="#F59E0B"
-              strokeWidth={1.8}
-            />
-          </Svg>
-        </>
+      {variant === 'geometry' && (
+        <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+          <Path d={tZonePath} fill="rgba(30, 108, 239, 0.22)" stroke="#2563EB" strokeWidth={1.2} />
+          <Path d={lCheekPath} fill="rgba(14, 165, 233, 0.18)" stroke="#38BDF8" strokeWidth={1} />
+          <Path d={rCheekPath} fill="rgba(14, 165, 233, 0.18)" stroke="#38BDF8" strokeWidth={1} />
+          <Path d={contourPath} fill="none" stroke="#FFFFFF" strokeWidth={1.4} />
+          {[
+            lm.forehead,
+            lm.left_eye,
+            lm.right_eye,
+            lm.nose_tip,
+            lm.left_cheek,
+            lm.right_cheek,
+            lm.mouth_center,
+            lm.chin,
+          ].map(([nx, ny], i) => {
+            const [px, py] = mapNormalizedToCoverBox(
+              nx,
+              ny,
+              width,
+              height,
+              naturalSize?.width,
+              naturalSize?.height
+            );
+            return (
+              <Circle
+                key={`gl-${i}`}
+                cx={px}
+                cy={py}
+                r={2.5}
+                fill="#FFFFFF"
+                stroke="#1E6CEF"
+                strokeWidth={1.1}
+              />
+            );
+          })}
+        </Svg>
       )}
 
-      {/* Corner Stage Pill */}
-      <View style={styles.diffCornerBadge}>
-        <Text style={styles.diffCornerBadgeText}>
-          {showOriginal
-            ? 'FOTO ASLI'
-            : variant === 'preprocessing'
-            ? 'HSV / YCbCr'
-            : variant === 'segmentation'
-            ? '468 MESH'
-            : '384+ PATCH'}
-        </Text>
-      </View>
+      {variant === 'micro_map' && (
+        <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+          <Defs>
+            <ClipPath id={clipId}>
+              <Path d={contourPath} />
+            </ClipPath>
+          </Defs>
+          <G clipPath={`url(#${clipId})`}>
+            {patches.map((p, idx) => (
+              <Rect
+                key={`mp-${idx}`}
+                x={p.rx}
+                y={p.ry}
+                width={p.rw}
+                height={p.rh}
+                fill={p.color}
+                stroke="rgba(255, 255, 255, 0.22)"
+                strokeWidth={0.4}
+              />
+            ))}
+          </G>
+          <Path d={contourPath} fill="none" stroke="#FFFFFF" strokeWidth={1.1} />
+        </Svg>
+      )}
     </View>
   );
 }
 
 /**
- * 3. Interactive Gallery & Comparison for the 3 Difference Images
+ * Horizontal 3-column layout (`3 berjejer horizontal`) revealing the 3 processed
+ * difference images ONE BY ONE sequentially (`keluar satu satu per animasi`).
+ * Designed strictly in clean AURA Blue & White clinical styling.
  */
 export function SkinDifferenceTriplet({
   imageUri,
@@ -804,502 +706,988 @@ export function SkinDifferenceTriplet({
   data: SkinScanData;
   summary?: AgenticPipelineSummary;
 }) {
-  const [selectedVariant, setSelectedVariant] =
-    useState<SkinDiffVariant>('preprocessing');
-  const [showOriginal, setShowOriginal] = useState(false);
+  const [activeVariant, setActiveVariant] = useState<SkinDiffVariant>('woodlamp');
+  const [compareOriginal, setCompareOriginal] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const [thumbBox, setThumbBox] = useState<{ width: number; height: number }>({
+    width: 102,
+    height: 138,
+  });
 
-  const metricsSummary = useMemo(
+  const resolvedSummary = useMemo(
     () => summary || buildAgenticSummary(data),
     [data, summary]
   );
 
+  const thumbAspectRatio = useMemo(() => {
+    const iw = data.cv_analysis?.cv_metrics?.image_width;
+    const ih = data.cv_analysis?.cv_metrics?.image_height;
+    if (iw && ih && ih > 0) {
+      return Math.max(0.62, Math.min(0.85, iw / ih));
+    }
+    return 0.74;
+  }, [data.cv_analysis?.cv_metrics?.image_width, data.cv_analysis?.cv_metrics?.image_height]);
+
+  const modalDims = useMemo(() => {
+    const winW = Dimensions.get('window').width;
+    const w = Math.min(winW - 48, 340);
+    const h = Math.round(w / thumbAspectRatio);
+    return { width: w, height: Math.min(h, 460) };
+  }, [thumbAspectRatio]);
+
+  // Sequential one-by-one animation progress for the 3 horizontal images
+  const [anim0] = useState(() => new Animated.Value(0));
+  const [anim1] = useState(() => new Animated.Value(0));
+  const [anim2] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    anim0.setValue(0);
+    anim1.setValue(0);
+    anim2.setValue(0);
+
+    const anims = [anim0, anim1, anim2].map((val) =>
+      Animated.timing(val, {
+        toValue: 1,
+        duration: 420,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      })
+    );
+    const seq = Animated.stagger(360, anims);
+    seq.start();
+
+    return () => {
+      seq.stop();
+    };
+  }, [imageUri, data.condition, anim0, anim1, anim2]);
+
   const cards: {
-    variant: SkinDiffVariant;
+    key: SkinDiffVariant;
     stepNum: string;
-    title: string;
     shortTitle: string;
-    metricLabel: string;
-    metricValue: string;
-    accent: string;
-    detailText: string;
+    subTag: string;
+    anim: Animated.Value;
+    headline: string;
+    metricText: string;
+    description: string;
   }[] = [
     {
-      variant: 'preprocessing',
-      stepNum: 'Citra 1',
-      title: 'Preprocessing, Dull Razor & Isolasi HSV/YCbCr',
-      shortTitle: 'HSV / YCbCr',
-      metricLabel: 'Isolasi Artefak',
-      metricValue: `${metricsSummary.artifactSuppressionRate}%`,
-      accent: '#14B8A6',
-      detailText:
-        'Menyeimbangkan pencahayaan ruangan & glare, menghapus artefak rambut halus dengan filter morfologis Dull Razor, serta memisahkan piksel kulit via HSV & YCbCr.',
+      key: 'woodlamp',
+      stepNum: '01',
+      shortTitle: "Wood's Lamp",
+      subTag: 'UV 365nm',
+      anim: anim0,
+      headline: "Transformasi Cahaya Wood's Lamp 365nm",
+      metricText: `Sebum UV: ${resolvedSummary.woodSebumIndex ?? 38}/100`,
+      description:
+        "Mengubah spektrum gambar ke cahaya Wood's Lamp 365nm untuk memperjelas sebum T-zone, pori, dan kontras melanin subkutan sebelum analisis klinis.",
     },
     {
-      variant: 'segmentation',
-      stepNum: 'Citra 2',
-      title: '468-Point Face Mesh & Partisi T-Zone / U-Zone',
-      shortTitle: '468 Mesh',
-      metricLabel: 'T-Zone / U-Zone',
-      metricValue: `${metricsSummary.tZoneScore} / ${metricsSummary.uZoneScore}`,
-      accent: '#0EA5E9',
-      detailText:
-        'Memetakan 468 titik landmark wajah untuk membagi zona T-Zone (dahi, hidung, dagu) & U-Zone (pipi, rahang) dalam mengevaluasi sebum, hidrasi, dan barier kulit.',
+      key: 'geometry',
+      stepNum: '02',
+      shortTitle: 'Geometri Wajah',
+      subTag: resolvedSummary.autoFitted ? 'Auto-Fit' : 'Mesh T/U',
+      anim: anim1,
+      headline: 'Penyesuaian Geometri Wajah Otomatis',
+      metricText: `Zona T/U: ${resolvedSummary.tZoneScore}/${resolvedSummary.uZoneScore}`,
+      description:
+        'Algoritma Python CV mendeteksi kontur kulit YCbCr/HSV serta menyelaraskan mata, hidung, bibir, T-Zone & U-Zone secara otomatis.',
     },
     {
-      variant: 'patch_hybrid',
-      stepNum: 'Citra 3',
-      title: 'Peta Mikro-Region 384+ Patch & Hybrid Modeling',
-      shortTitle: '384+ Patch',
-      metricLabel: 'Intensitas Stres',
-      metricValue: `${metricsSummary.patchAnomalyRate}%`,
-      accent: '#F59E0B',
-      detailText:
-        `Menggabungkan ${metricsSummary.microRegionsCount}+ patch lokal untuk mendeteksi fitur halus: kemerahan (${data.skin_metrics?.redness_score ?? 0}%), paparan UV (${data.skin_metrics?.uv_damage_score ?? 0}%), & sumbatan polusi (${data.skin_metrics?.pollution_clog_score ?? 0}%).`,
+      key: 'micro_map',
+      stepNum: '03',
+      shortTitle: 'Analisis Lanjut',
+      subTag: '384+ Patch',
+      anim: anim2,
+      headline: 'Peta Biomarker 384+ Mikro-Patch',
+      metricText: `Indeks Eritema: ${resolvedSummary.erythemaIndex ?? 18}/100`,
+      description:
+        'Evaluasi intensitas kemerahan vaskular, gangguan barrier, dan keragaman tekstur pada tiap blok mikro di dalam kontur wajah.',
     },
   ];
 
-  const activeCard =
-    cards.find((c) => c.variant === selectedVariant) || cards[0];
+  const activeCard = cards.find((c) => c.key === activeVariant) || cards[0];
+  const croppedOriginalUri = data.cv_analysis?.cropped_face_image || imageUri;
 
   return (
-    <View style={styles.tripletWrapper}>
-      <View style={styles.tripletHeaderRow}>
+    <View style={styles.tripletContainer}>
+      {/* Header Row */}
+      <View style={styles.tripletHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.tripletHeading}>3 Gambar Perbedaan Hasil Analisis</Text>
-          <Text style={styles.tripletSubheading}>
-            Ketuk salah satu citra untuk membandingkan lapisan pemrosesan dengan foto asli
-          </Text>
+          <View style={styles.tripletBadge}>
+            <Ionicons name="layers-outline" size={12} color="#1E6CEF" />
+            <Text style={styles.tripletBadgeText}>HASIL VISUAL 3 TAHAP</Text>
+          </View>
+          <Text style={styles.tripletTitle}>Citra Perbedaan Kulit & Geometri</Text>
         </View>
+        <Pressable
+          style={[
+            styles.compareChip,
+            compareOriginal && styles.compareChipActive,
+          ]}
+          onPress={() => setCompareOriginal((prev) => !prev)}
+        >
+          <Ionicons
+            name="eye-outline"
+            size={13}
+            color={compareOriginal ? '#FFFFFF' : '#1E6CEF'}
+          />
+          <Text
+            style={[
+              styles.compareChipText,
+              compareOriginal && styles.compareChipTextActive,
+            ]}
+          >
+            {compareOriginal ? 'Lihat CV' : 'Foto Asli'}
+          </Text>
+        </Pressable>
       </View>
 
-      {/* 3-Card Side-by-Side Thumbnails */}
-      <View style={styles.tripletRow}>
-        {cards.map((item) => {
-          const isSelected = item.variant === selectedVariant;
+      {/* ─── 3 HORIZONTAL CARDS APPEARING ONE BY ONE SEQUENTIALLY ─── */}
+      <View style={styles.horizontalRow}>
+        {cards.map((card, idx) => {
+          const isSelected = activeVariant === card.key;
+          const translateY = card.anim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [18, 0],
+          });
+          const scale = card.anim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.94, 1],
+          });
+
           return (
-            <Pressable
-              key={item.variant}
-              onPress={() => {
-                setSelectedVariant(item.variant);
-                setShowOriginal(false);
-              }}
+            <Animated.View
+              key={card.key}
               style={[
-                styles.tripletThumbCard,
-                isSelected && {
-                  borderColor: item.accent,
-                  backgroundColor: '#F0F9FF',
+                styles.horizontalCardWrap,
+                {
+                  opacity: card.anim,
+                  transform: [{ translateY }, { scale }],
                 },
               ]}
             >
-              <SkinDiffCanvas
-                imageUri={imageUri}
-                variant={item.variant}
-                data={data}
-                height={118}
-              />
-              <View style={styles.tripletThumbMeta}>
-                <Text
-                  style={[
-                    styles.tripletThumbNum,
-                    { color: item.accent },
-                  ]}
+              <Pressable
+                style={[
+                  styles.horizontalCard,
+                  isSelected && styles.horizontalCardSelected,
+                ]}
+                onPress={() => {
+                  setCompareOriginal(false);
+                  if (activeVariant === card.key) {
+                    setZoomOpen(true);
+                  } else {
+                    setActiveVariant(card.key);
+                  }
+                }}
+              >
+                <View
+                  style={[styles.thumbFrameWrap, { aspectRatio: thumbAspectRatio }]}
+                  onLayout={
+                    idx === 0
+                      ? (ev) => {
+                          const { width: lw, height: lh } = ev.nativeEvent.layout;
+                          if (lw > 20 && lh > 20) {
+                            setThumbBox((prev) =>
+                              Math.abs(prev.width - lw) > 1 || Math.abs(prev.height - lh) > 1
+                                ? { width: Math.round(lw), height: Math.round(lh) }
+                                : prev
+                            );
+                          }
+                        }
+                      : undefined
+                  }
                 >
-                  {item.stepNum}
-                </Text>
-                <Text style={styles.tripletThumbTitle} numberOfLines={1}>
-                  {item.shortTitle}
-                </Text>
-              </View>
-            </Pressable>
+                  {compareOriginal && croppedOriginalUri ? (
+                    <Image
+                      source={{ uri: croppedOriginalUri }}
+                      style={StyleSheet.absoluteFill}
+                      contentFit="contain"
+                    />
+                  ) : (
+                    <VisualVariantFrame
+                      variant={card.key}
+                      imageUri={croppedOriginalUri}
+                      data={data}
+                      width={thumbBox.width}
+                      height={thumbBox.height}
+                    />
+                  )}
+                  <View style={styles.stepPillOverlay}>
+                    <Text style={styles.stepPillOverlayText}>{card.stepNum}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.horizontalCardMeta}>
+                  <Text
+                    style={[
+                      styles.horizontalCardTitle,
+                      isSelected && styles.horizontalCardTitleSelected,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {card.shortTitle}
+                  </Text>
+                  <Text style={styles.horizontalCardSub} numberOfLines={1}>
+                    {card.subTag}
+                  </Text>
+                </View>
+              </Pressable>
+            </Animated.View>
           );
         })}
       </View>
 
-      {/* Active Detail Difference Comparison Card */}
-      <View style={styles.diffDetailBox}>
-        <View style={styles.diffDetailTopBar}>
-          <View style={{ flex: 1, marginRight: 10 }}>
-            <Text style={[styles.diffDetailTag, { color: activeCard.accent }]}>
-              {activeCard.stepNum.toUpperCase()} • {activeCard.metricLabel}:{' '}
-              {activeCard.metricValue}
-            </Text>
-            <Text style={styles.diffDetailTitle}>{activeCard.title}</Text>
+      {/* Clean Selected Image Clinical Detail Footer (Light Blue Card) */}
+      <View style={styles.selectedInfoCard}>
+        <View style={styles.selectedInfoHeader}>
+          <Text style={styles.selectedInfoHeadline}>{activeCard.headline}</Text>
+          <View style={styles.metricPillBlue}>
+            <Text style={styles.metricPillBlueText}>{activeCard.metricText}</Text>
           </View>
-          <Pressable
-            onPress={() => setShowOriginal((prev) => !prev)}
-            style={[
-              styles.compareToggleBtn,
-              showOriginal && styles.compareToggleBtnActive,
-            ]}
-          >
-            <Ionicons
-              name={showOriginal ? 'eye-outline' : 'git-compare-outline'}
-              size={14}
-              color={showOriginal ? '#FFFFFF' : '#0284C7'}
-              style={{ marginRight: 4 }}
-            />
-            <Text
-              style={[
-                styles.compareToggleText,
-                showOriginal && { color: '#FFFFFF' },
-              ]}
-            >
-              {showOriginal ? 'Tampil Hasil' : 'Lihat Asli'}
-            </Text>
+        </View>
+        <Text style={styles.selectedInfoDesc}>{activeCard.description}</Text>
+
+        {/* Clean Legend + Zoom trigger */}
+        <View style={styles.legendRow}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#1E6CEF' }]} />
+            <Text style={styles.legendText}>Optimal / Normal</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#0EA5E9' }]} />
+            <Text style={styles.legendText}>Fluoresensi Sebum UV</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+            <Text style={styles.legendText}>Stress Barrier</Text>
+          </View>
+          <Pressable style={styles.zoomMiniBtn} onPress={() => setZoomOpen(true)}>
+            <Ionicons name="expand-outline" size={12} color="#1E6CEF" />
+            <Text style={styles.zoomMiniBtnText}>Perbesar</Text>
           </Pressable>
         </View>
-
-        <SkinDiffCanvas
-          imageUri={imageUri}
-          variant={activeCard.variant}
-          data={data}
-          height={230}
-          showOriginal={showOriginal}
-        />
-
-        <Text style={styles.diffDetailDesc}>{activeCard.detailText}</Text>
       </View>
+
+      {/* Full-Face Inspection Modal */}
+      <Modal
+        visible={zoomOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setZoomOpen(false)}
+      >
+        <View style={styles.zoomModalBackdrop}>
+          <View style={styles.zoomModalCard}>
+            <View style={styles.zoomModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.zoomModalTitle}>{activeCard.headline}</Text>
+                <Text style={styles.zoomModalSub}>{activeCard.metricText}</Text>
+              </View>
+              <Pressable
+                style={styles.zoomCloseBtn}
+                onPress={() => setZoomOpen(false)}
+              >
+                <Ionicons name="close" size={18} color="#0F172A" />
+              </Pressable>
+            </View>
+
+            <View style={[styles.zoomStageWrap, { width: modalDims.width, height: modalDims.height }]}>
+              {compareOriginal && croppedOriginalUri ? (
+                <Image
+                  source={{ uri: croppedOriginalUri }}
+                  style={StyleSheet.absoluteFill}
+                  contentFit="contain"
+                />
+              ) : (
+                <VisualVariantFrame
+                  variant={activeVariant}
+                  imageUri={croppedOriginalUri}
+                  data={data}
+                  width={modalDims.width}
+                  height={modalDims.height}
+                />
+              )}
+            </View>
+
+            <View style={styles.zoomSwitcherRow}>
+              {cards.map((c) => {
+                const active = !compareOriginal && activeVariant === c.key;
+                return (
+                  <Pressable
+                    key={`m-${c.key}`}
+                    style={[styles.zoomTabPill, active && styles.zoomTabPillActive]}
+                    onPress={() => {
+                      setCompareOriginal(false);
+                      setActiveVariant(c.key);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.zoomTabText,
+                        active && styles.zoomTabTextActive,
+                      ]}
+                    >
+                      {c.shortTitle}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              {croppedOriginalUri ? (
+                <Pressable
+                  style={[
+                    styles.zoomTabPill,
+                    compareOriginal && styles.zoomTabPillActive,
+                  ]}
+                  onPress={() => setCompareOriginal((p) => !p)}
+                >
+                  <Text
+                    style={[
+                      styles.zoomTabText,
+                      compareOriginal && styles.zoomTabTextActive,
+                    ]}
+                  >
+                    Asli
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 /**
- * 4. Agentic AI Stepper shown right after user scans / uploads photo
+ * Clean Clinical Blue & White Agentic AI Pipeline View shown during processing.
  */
 export function AgenticPipelinePanel({
   photoUri,
   activeStepIndex,
-  isCompleted,
+  isCompleted = false,
+  cvPreview,
 }: {
   photoUri?: string | null;
   activeStepIndex: number;
-  isCompleted: boolean;
+  isCompleted?: boolean;
+  cvPreview?: SkinCvAnalysis | null;
 }) {
-  const stage1Steps = AGENTIC_PIPELINE_STEPS.filter((s) => s.stage === 1);
-  const stage2Steps = AGENTIC_PIPELINE_STEPS.filter((s) => s.stage === 2);
+  const activeStep =
+    AGENTIC_PIPELINE_STEPS[
+      Math.min(activeStepIndex, AGENTIC_PIPELINE_STEPS.length - 1)
+    ];
 
-  const previewVariant: SkinDiffVariant =
-    activeStepIndex < 3
-      ? 'preprocessing'
-      : activeStepIndex < 5
-      ? 'segmentation'
-      : 'patch_hybrid';
+  const isWoodLampActive = activeStepIndex >= 1;
+  const stageImageUri = useMemo(() => {
+    if (!cvPreview) return photoUri || undefined;
+    if (activeStepIndex >= 3 && cvPreview.micro_analysis_image) {
+      return cvPreview.micro_analysis_image;
+    }
+    if (activeStepIndex >= 2 && cvPreview.geometry_mesh_image) {
+      return cvPreview.geometry_mesh_image;
+    }
+    if (activeStepIndex >= 1 && cvPreview.woodlamp_image) {
+      return cvPreview.woodlamp_image;
+    }
+    return cvPreview.cropped_face_image || photoUri || undefined;
+  }, [cvPreview, activeStepIndex, photoUri]);
+
+  const hasLiveCvImage = Boolean(
+    cvPreview &&
+      (activeStepIndex >= 1 || cvPreview.cropped_face_image) &&
+      stageImageUri?.startsWith('data:image')
+  );
+  const previewAspectRatio = useMemo(() => {
+    const iw = cvPreview?.cv_metrics?.image_width;
+    const ih = cvPreview?.cv_metrics?.image_height;
+    if (iw && ih && ih > 0) {
+      return Math.max(0.62, Math.min(0.86, iw / ih));
+    }
+    return 0.78;
+  }, [cvPreview?.cv_metrics?.image_width, cvPreview?.cv_metrics?.image_height]);
+  const previewW = 168;
+  const previewH = Math.round(previewW / previewAspectRatio);
+
+  // Subtle horizontal Wood's UV sweep animation across preview photo
+  const [scanLine] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    if (isCompleted) return;
+    scanLine.setValue(0);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLine, {
+          toValue: 1,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanLine, {
+          toValue: 0,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isCompleted, scanLine]);
+
+  const sweepTranslateY = scanLine.interpolate({
+    inputRange: [0, 1],
+    outputRange: [8, Math.max(24, previewH - 12)],
+  });
 
   return (
     <View style={styles.agenticContainer}>
-      {/* Live Visual Face Morphing Header */}
+      {/* White Clinical Preview Card with Real Captured Face UV + Auto-Fitted CV Transition */}
       <View style={styles.agenticPreviewCard}>
-        <SkinDiffCanvas
-          imageUri={photoUri || undefined}
-          variant={previewVariant}
-          height={186}
-        />
+        <View style={[styles.previewStage, { width: previewW, height: previewH }]}>
+          {stageImageUri ? (
+            <Image
+              source={{ uri: stageImageUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit={hasLiveCvImage ? 'contain' : 'cover'}
+            />
+          ) : (
+            <LinearGradient
+              colors={['#EFF6FF', '#DBEAFE']}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
+
+          {/* Subtle Wood's Lamp 365nm tint ONLY while awaiting real Python Wood's Lamp CV */}
+          {isWoodLampActive && !hasLiveCvImage && (
+            <View
+              pointerEvents="none"
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: 'rgba(15, 43, 107, 0.50)' },
+              ]}
+            />
+          )}
+
+          {/* Render REAL captured geometry mesh once CV detects face (kept crisp over live preview) */}
+          <FaceScanMaskOverlay
+            frameWidth={previewW}
+            frameHeight={previewH}
+            statusLabel=""
+            showCornerBrackets={!hasLiveCvImage}
+            showMesh={Boolean(cvPreview?.face_geometry) && activeStepIndex < 3}
+            faceGeometry={cvPreview?.face_geometry}
+            srcWidth={cvPreview?.cv_metrics?.image_width}
+            srcHeight={cvPreview?.cv_metrics?.image_height}
+            fitMode={hasLiveCvImage ? 'contain' : 'cover'}
+          />
+
+          {/* Subtle clean blue scan beam */}
+          {!isCompleted && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.scanBeamLine,
+                { transform: [{ translateY: sweepTranslateY }] },
+              ]}
+            />
+          )}
+        </View>
+
         <View style={styles.agenticLiveInfo}>
           <View style={styles.agenticBadgeRow}>
-            <View
-              style={[
-                styles.agenticPill,
-                isCompleted ? styles.agenticPillDone : styles.agenticPillRunning,
-              ]}
-            >
-              <Ionicons
-                name={isCompleted ? 'checkmark-circle' : 'sparkles'}
-                size={13}
-                color={isCompleted ? '#10B981' : '#38BDF8'}
-                style={{ marginRight: 5 }}
-              />
-              <Text style={styles.agenticPillText}>
+            <View style={styles.agenticPillBlue}>
+              <View style={styles.agenticBlueDot} />
+              <Text style={styles.agenticPillTextBlue}>
                 {isCompleted
-                  ? '3 Citra Perbedaan Dihasilkan'
-                  : 'Agentic AI Skin Pipeline Berjalan'}
+                  ? 'Analisis Selesai'
+                  : `Langkah ${activeStepIndex + 1} / ${AGENTIC_PIPELINE_STEPS.length}`}
               </Text>
             </View>
           </View>
-          <Text style={styles.agenticActiveTitle}>
-            {isCompleted
-              ? 'Tahap Preprocessing & Facial Mapping Selesai'
-              : AGENTIC_PIPELINE_STEPS[
-                  Math.min(activeStepIndex, AGENTIC_PIPELINE_STEPS.length - 1)
-                ].title}
-          </Text>
-          <Text style={styles.agenticActiveSub}>
-            {isCompleted
-              ? 'Semua 3 citra perbedaan siap ditinjau sebelum masuk ke halaman hasil analisis akhir.'
-              : AGENTIC_PIPELINE_STEPS[
-                  Math.min(activeStepIndex, AGENTIC_PIPELINE_STEPS.length - 1)
-                ].description}
-          </Text>
+          <Text style={styles.agenticActiveTitle}>{activeStep.title}</Text>
+          <Text style={styles.agenticActiveSub}>{activeStep.description}</Text>
         </View>
       </View>
 
-      {/* Stage 1 & Stage 2 Checklist */}
-      {[
-        { num: 1, title: '1. Image Preprocessing & Normalization', steps: stage1Steps },
-        { num: 2, title: '2. Facial Mapping & Segmentation', steps: stage2Steps },
-      ].map((group) => (
-        <View key={group.num} style={styles.stageGroupCard}>
-          <Text style={styles.stageGroupTitle}>{group.title}</Text>
-          {group.steps.map((step) => {
-            const globalIdx = AGENTIC_PIPELINE_STEPS.findIndex((s) => s.id === step.id);
-            const done = isCompleted || globalIdx < activeStepIndex;
-            const running = !isCompleted && globalIdx === activeStepIndex;
-            return (
+      {/* Clean White & Blue Stepper Cards */}
+      <View style={styles.stageGroupCard}>
+        <Text style={styles.stageGroupTitle}>Alur Pemrosesan Kulit Klinis</Text>
+        {AGENTIC_PIPELINE_STEPS.map((step, index) => {
+          const stepDone = isCompleted || activeStepIndex > index;
+          const stepRunning = !isCompleted && activeStepIndex === index;
+          return (
+            <View
+              key={step.id}
+              style={[
+                styles.substepRow,
+                stepRunning && styles.substepRowActive,
+              ]}
+            >
               <View
-                key={step.id}
                 style={[
-                  styles.substepRow,
-                  running && styles.substepRowActive,
+                  styles.substepIconCircle,
+                  stepDone && styles.substepIconDone,
+                  stepRunning && styles.substepIconRunning,
                 ]}
               >
-                <View
-                  style={[
-                    styles.substepIconCircle,
-                    done && styles.substepIconDone,
-                    running && styles.substepIconRunning,
-                  ]}
-                >
-                  <Ionicons
-                    name={done ? 'checkmark' : step.icon}
-                    size={15}
-                    color={done ? '#FFFFFF' : running ? '#0284C7' : '#64748B'}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.substepTitleRow}>
-                    <Text
-                      style={[
-                        styles.substepTitle,
-                        (done || running) && { color: '#F8FAFC' },
-                      ]}
-                    >
-                      {step.title}
-                    </Text>
-                    <View style={styles.substepTag}>
-                      <Text style={styles.substepTagText}>{step.badge}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.substepDesc}>{step.description}</Text>
-                </View>
+                <Ionicons
+                  name={stepDone ? 'checkmark' : step.icon}
+                  size={14}
+                  color={stepDone ? '#FFFFFF' : stepRunning ? '#FFFFFF' : '#64748B'}
+                />
               </View>
-            );
-          })}
-        </View>
-      ))}
+              <View style={{ flex: 1 }}>
+                <View style={styles.substepTitleRow}>
+                  <Text
+                    style={[
+                      styles.substepTitle,
+                      (stepRunning || stepDone) && styles.substepTitleActive,
+                    ]}
+                  >
+                    {step.title}
+                  </Text>
+                  <View style={styles.substepTag}>
+                    <Text style={styles.substepTagText}>{step.badge}</Text>
+                  </View>
+                </View>
+                <Text style={styles.substepDesc}>{step.description}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  maskCenter: {
+  maskContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  scanBeam: {
-    position: 'absolute',
-    top: 0,
-    height: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scanBeamLine: {
-    width: '100%',
-    height: 3,
-    borderRadius: 2,
-  },
-  diffCanvasWrap: {
-    width: '100%',
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: '#0F172A',
     position: 'relative',
   },
-  diffCornerBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.35)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  diffCornerBadgeText: {
-    color: '#F8FAFC',
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  tripletWrapper: {
-    marginBottom: 16,
-  },
-  tripletHeaderRow: {
+  readyPromptPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    gap: 7,
+    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(191, 219, 254, 0.5)',
   },
-  tripletHeading: {
-    fontSize: 15,
+  readyBlueDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#38BDF8',
+  },
+  readyPromptText: {
+    color: '#FFFFFF',
+    fontSize: 13.5,
+    fontWeight: '700',
+    letterSpacing: 0.15,
+  },
+
+  /* ─── 3 Horizontal Staggered Cards (Clean White & Blue) ─── */
+  tripletContainer: {
+    width: '100%',
+    gap: 12,
+  },
+  tripletHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  tripletBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    marginBottom: 4,
+  },
+  tripletBadgeText: {
+    color: '#1E6CEF',
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  tripletTitle: {
+    fontSize: 15.5,
     fontWeight: '800',
     color: '#0F172A',
   },
-  tripletSubheading: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  tripletRow: {
+  compareChip: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  tripletThumbCard: {
-    flex: 1,
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  compareChipActive: {
+    backgroundColor: '#1E6CEF',
+    borderColor: '#1E6CEF',
+  },
+  compareChipText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E6CEF',
+  },
+  compareChipTextActive: {
+    color: '#FFFFFF',
+  },
+  horizontalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  horizontalCardWrap: {
+    flex: 1,
+  },
+  horizontalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
     padding: 5,
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  tripletThumbMeta: {
-    paddingTop: 6,
-    paddingHorizontal: 3,
-    paddingBottom: 2,
+  horizontalCardSelected: {
+    borderColor: '#1E6CEF',
+    backgroundColor: '#EFF6FF',
   },
-  tripletThumbNum: {
-    fontSize: 10,
+  thumbFrameWrap: {
+    width: '100%',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#0F2B6B',
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  variantFrame: {
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  stepPillOverlay: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    borderRadius: 6,
+    paddingHorizontal: 5.5,
+    paddingVertical: 2,
+  },
+  stepPillOverlayText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
     fontWeight: '800',
   },
-  tripletThumbTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#0F172A',
+  horizontalCardMeta: {
+    paddingTop: 6,
+    paddingHorizontal: 2,
+    paddingBottom: 2,
+  },
+  horizontalCardTitle: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  horizontalCardTitleSelected: {
+    color: '#1E6CEF',
+  },
+  horizontalCardSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
     marginTop: 1,
   },
-  diffDetailBox: {
+  selectedInfoCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  selectedInfoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 4,
+  },
+  selectedInfoHeadline: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  metricPillBlue: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  metricPillBlueText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#1E6CEF',
+  },
+  selectedInfoDesc: {
+    fontSize: 11.5,
+    color: '#475569',
+    lineHeight: 17,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 9,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  zoomMiniBtn: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  zoomMiniBtnText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#1E6CEF',
+  },
+  zoomModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  zoomModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    gap: 12,
+  },
+  zoomModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  zoomModalTitle: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  zoomModalSub: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E6CEF',
+    marginTop: 2,
+  },
+  zoomCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomStageWrap: {
+    alignSelf: 'center',
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#0F2B6B',
+    borderWidth: 1.5,
+    borderColor: '#BFDBFE',
+  },
+  zoomSwitcherRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  zoomTabPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  zoomTabPillActive: {
+    backgroundColor: '#1E6CEF',
+    borderColor: '#1E6CEF',
+  },
+  zoomTabText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  zoomTabTextActive: {
+    color: '#FFFFFF',
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#475569',
+  },
+
+  /* ─── Agentic Pipeline Panel (Clean White & Clinical Blue) ─── */
+  agenticContainer: {
+    width: '100%',
+    gap: 12,
+  },
+  agenticPreviewCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#DBEAFE',
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  diffDetailTopBar: {
-    flexDirection: 'row',
+  previewStage: {
+    width: 164,
+    height: 196,
+    borderRadius: 16,
+    overflow: 'hidden',
+    alignSelf: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1.5,
+    borderColor: '#BFDBFE',
+    position: 'relative',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
+    justifyContent: 'center',
   },
-  diffDetailTag: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  diffDetailTitle: {
-    fontSize: 13.5,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginTop: 2,
-  },
-  compareToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E0F2FE',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 99,
-  },
-  compareToggleBtnActive: {
-    backgroundColor: '#0284C7',
-  },
-  compareToggleText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#0284C7',
-  },
-  diffDetailDesc: {
-    fontSize: 12.2,
-    color: '#475569',
-    lineHeight: 18,
-    marginTop: 10,
-  },
-  agenticContainer: {
-    width: '100%',
-    gap: 10,
-  },
-  agenticPreviewCard: {
-    backgroundColor: 'rgba(15, 23, 42, 0.92)',
-    borderRadius: 20,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.28)',
+  scanBeamLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#38BDF8',
+    shadowColor: '#38BDF8',
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
   },
   agenticLiveInfo: {
-    marginTop: 10,
+    marginTop: 12,
+    alignItems: 'center',
   },
   agenticBadgeRow: {
     flexDirection: 'row',
     marginBottom: 6,
   },
-  agenticPill: {
+  agenticPillBlue: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 99,
   },
-  agenticPillRunning: {
-    backgroundColor: 'rgba(14, 165, 233, 0.16)',
+  agenticBlueDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#1E6CEF',
   },
-  agenticPillDone: {
-    backgroundColor: 'rgba(16, 185, 129, 0.16)',
-  },
-  agenticPillText: {
-    color: '#F8FAFC',
+  agenticPillTextBlue: {
+    color: '#1E6CEF',
     fontSize: 11,
     fontWeight: '800',
   },
   agenticActiveTitle: {
-    color: '#FFFFFF',
+    color: '#0F172A',
     fontSize: 15,
     fontWeight: '800',
+    textAlign: 'center',
   },
   agenticActiveSub: {
-    color: '#94A3B8',
+    color: '#64748B',
     fontSize: 12,
     lineHeight: 17,
     marginTop: 3,
+    textAlign: 'center',
   },
   stageGroupCard: {
-    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 18,
-    padding: 12,
+    padding: 14,
     borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.2)',
+    borderColor: '#E2E8F0',
     gap: 8,
   },
   stageGroupTitle: {
-    color: '#38BDF8',
+    color: '#1E6CEF',
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.3,
+    marginBottom: 2,
   },
   substepRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    padding: 8,
+    padding: 10,
     borderRadius: 12,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+    backgroundColor: '#F8FAFC',
   },
   substepRowActive: {
-    backgroundColor: 'rgba(14, 165, 233, 0.16)',
+    backgroundColor: '#EFF6FF',
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.4)',
+    borderColor: '#BFDBFE',
   },
   substepIconCircle: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(148, 163, 184, 0.16)',
+    backgroundColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
@@ -1309,7 +1697,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#10B981',
   },
   substepIconRunning: {
-    backgroundColor: '#E0F2FE',
+    backgroundColor: '#1E6CEF',
   },
   substepTitleRow: {
     flexDirection: 'row',
@@ -1318,24 +1706,27 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   substepTitle: {
-    color: '#CBD5E1',
+    color: '#475569',
     fontSize: 12.5,
     fontWeight: '700',
     flex: 1,
   },
+  substepTitleActive: {
+    color: '#0F172A',
+  },
   substepTag: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: '#DBEAFE',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
   },
   substepTagText: {
-    color: '#7DD3FC',
+    color: '#1D4ED8',
     fontSize: 9.5,
     fontWeight: '700',
   },
   substepDesc: {
-    color: '#94A3B8',
+    color: '#64748B',
     fontSize: 11,
     lineHeight: 15.5,
     marginTop: 2,

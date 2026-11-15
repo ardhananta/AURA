@@ -17,6 +17,7 @@ import {
 } from '@/types/tracking';
 import axios from 'axios';
 import { api } from './api';
+import { calculateOfflineSemarangRoute } from './semarangRoadService';
 
 const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const routeCache = new Map<string, { route: NavigationRoute; timestamp: number }>();
@@ -208,7 +209,12 @@ export const navigationService = {
       routeCache.set(cacheKey, { route: osrmRoute, timestamp: Date.now() });
       return osrmRoute;
     } catch (osrmErr: any) {
-      console.error('[NavigationService] OSRM route fetch failed:', osrmErr?.message || osrmErr);
+      console.warn('[NavigationService] OSRM route fetch failed, trying offline Semarang GPKG router:', osrmErr?.message || osrmErr);
+      const localRoute = calculateOfflineSemarangRoute(origin, destination);
+      if (localRoute && isValidCoordinatesArray(localRoute.coordinates)) {
+        routeCache.set(cacheKey, { route: localRoute, timestamp: Date.now() });
+        return localRoute;
+      }
       throw new Error('Gagal mendapatkan rute navigasi. Periksa koneksi internet Anda.');
     }
   },

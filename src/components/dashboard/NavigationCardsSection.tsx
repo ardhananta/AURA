@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { View, Pressable, Text } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -14,11 +14,14 @@ export const NavigationCardsSection: React.FC = () => {
   const router = useRouter();
 
   return (
-    <View
-      style={{
-        flexDirection: 'row',
-        gap: 12,
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{
         paddingHorizontal: 16,
+        gap: 12,
+      }}
+      style={{
         marginTop: 20,
         marginBottom: 8,
       }}
@@ -28,9 +31,9 @@ export const NavigationCardsSection: React.FC = () => {
         onPress={() => router.push('/daily-journey')}
         style={({ pressed }) => [
           {
-            flex: 1,
+            width: 196,
             opacity: pressed ? 0.7 : 1,
-            transform: [{ scale: pressed ? 0.95 : 1 }],
+            transform: [{ scale: pressed ? 0.96 : 1 }],
           },
         ]}
       >
@@ -80,9 +83,9 @@ export const NavigationCardsSection: React.FC = () => {
         onPress={() => router.push('/universal-navigation')}
         style={({ pressed }) => [
           {
-            flex: 1,
+            width: 196,
             opacity: pressed ? 0.7 : 1,
-            transform: [{ scale: pressed ? 0.95 : 1 }],
+            transform: [{ scale: pressed ? 0.96 : 1 }],
           },
         ]}
       >
@@ -126,6 +129,6 @@ export const NavigationCardsSection: React.FC = () => {
           </Text>
         </LinearGradient>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 };
