@@ -30,24 +30,64 @@ export default function LoginScreen() {
   const [serverError, setServerError] = useState<string | null>(null);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
+  // Safety timeout: Cegah layar stuck selamanya di splash "Menyambungkan sesi aktif"
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    // Batas maksimal tampilan splash 2.5 detik agar pengguna tidak pernah stuck
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Auto-redirect jika user sudah login / memiliki sesi aktif
   useEffect(() => {
     if (!isAuthLoading && isAuthenticated && user) {
-      if (isProfileComplete(user)) {
-        router.replace('/dashboard');
-      } else {
-        router.replace('/complete-profile');
-      }
+      const target = isProfileComplete(user) ? '/dashboard' : '/complete-profile';
+      const redirectTimer = setTimeout(() => {
+        router.replace(target as any);
+      }, 100);
+      return () => clearTimeout(redirectTimer);
     }
   }, [isAuthLoading, isAuthenticated, user, router]);
 
-  if (isAuthLoading || (isAuthenticated && user)) {
+  // Hanya tampilkan splash jika sesi sedang dicek dan belum melewati safety timeout
+  if ((isAuthLoading || (isAuthenticated && user)) && showSplash) {
     return (
       <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
         <PageTransitionSplash
           visible={true}
           message="Menyambungkan sesi aktif..."
         />
+        {/* Tombol darurat lewati jika jaringan lambat */}
+        <Pressable
+          onPress={() => {
+            setShowSplash(false);
+            if (isAuthenticated && user) {
+              router.replace(isProfileComplete(user) ? '/dashboard' : '/complete-profile');
+            }
+          }}
+          style={{
+            position: 'absolute',
+            bottom: 30,
+            alignSelf: 'center',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            paddingHorizontal: 20,
+            paddingVertical: 9,
+            borderRadius: 999,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.15,
+            shadowRadius: 6,
+            elevation: 4,
+            zIndex: 999,
+          }}
+        >
+          <Text style={{ color: '#0284C7', fontSize: 12.5, fontWeight: '700' }}>
+            Lewati & Lanjutkan ➔
+          </Text>
+        </Pressable>
       </View>
     );
   }

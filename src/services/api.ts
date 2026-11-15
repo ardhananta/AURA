@@ -58,11 +58,11 @@ api.interceptors.response.use(
 
       if (refreshToken) {
         try {
-          // Direct axios call to avoid interceptor loop
+          // Direct axios call with strict 4s timeout to prevent hanging on offline/unreachable network
           const res = await axios.post<ApiResponse<{ tokens: AuthTokens }>>(
             `${BASE_URL}/api/auth/refresh`,
             { refreshToken },
-            { headers: { 'Content-Type': 'application/json' } }
+            { headers: { 'Content-Type': 'application/json' }, timeout: 4000 }
           );
 
           if (res.data.success && res.data.data?.tokens?.idToken) {
@@ -171,7 +171,8 @@ export const authApi = {
   refreshToken: async (refreshToken: string): Promise<AuthTokens> => {
     const res = await axios.post<ApiResponse<{ tokens: AuthTokens }>>(
       `${BASE_URL}/api/auth/refresh`,
-      { refreshToken }
+      { refreshToken },
+      { timeout: 5000 }
     );
     if (!res.data.success) {
       throw res.data;

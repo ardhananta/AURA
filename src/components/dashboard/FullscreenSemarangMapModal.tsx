@@ -10,6 +10,9 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  TextInput,
+  Linking,
+  Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +24,76 @@ import {
   NearbyZoneResult,
   ImpactLevel,
 } from '@/types/zones';
+
+// ─── Semarang Named Roads from GeoPackage (OSM) ──────────────────────────────
+import semarangRoads from '@/data/semarang-named-roads.json';
+
+interface RoadEntry {
+  n: string;   // name
+  h: string;   // highway type
+  lat: number;
+  lon: number;
+}
+
+const ROAD_DATA = semarangRoads as RoadEntry[];
+
+// ─── Navigation Helpers ───────────────────────────────────────────────────────
+/**
+ * Buka navigasi ke koordinat tujuan menggunakan Google Maps, Apple Maps, atau Waze.
+ * Fallback graceful antar-platform.
+ */
+async function openNavigation(
+  destLat: number,
+  destLon: number,
+  destName: string,
+  originLat?: number,
+  originLon?: number
+) {
+  const label = encodeURIComponent(destName);
+
+  // Google Maps — works on both Android & iOS
+  const googleUrl = originLat != null && originLon != null
+    ? `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`
+    : `https://www.google.com/maps/search/?api=1&query=${destLat},${destLon}`;
+
+  // Apple Maps — iOS native
+  const appleUrl = `maps://maps.apple.com/?daddr=${destLat},${destLon}&dirflg=d`;
+
+  // Waze deep link
+  const wazeUrl = `https://waze.com/ul?ll=${destLat},${destLon}&navigate=yes`;
+
+  if (Platform.OS === 'ios') {
+    // Prefer Apple Maps on iOS, fallback to Google Maps
+    const canApple = await Linking.canOpenURL(appleUrl).catch(() => false);
+    if (canApple) {
+      await Linking.openURL(appleUrl);
+      return;
+    }
+  }
+
+  // Check if Waze is installed
+  const canWaze = await Linking.canOpenURL('waze://').catch(() => false);
+
+  Alert.alert(
+    '🧭 Navigasi ke',
+    destName,
+    [
+      {
+        text: 'Google Maps',
+        onPress: () => Linking.openURL(googleUrl),
+      },
+      ...(canWaze ? [{
+        text: 'Waze',
+        onPress: () => Linking.openURL(wazeUrl),
+      }] : []),
+      ...(Platform.OS === 'ios' ? [{
+        text: 'Apple Maps',
+        onPress: () => Linking.openURL(appleUrl),
+      }] : []),
+      { text: 'Batal', style: 'cancel' as const },
+    ]
+  );
+}
 
 interface FullscreenSemarangMapModalProps {
   visible: boolean;
@@ -106,6 +179,86 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
   const [isLoading, setIsLoading] = useState(false);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [is3DMode, setIs3DMode] = useState(true);
+
+  // ─── Search & Navigation State ───────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [searchTarget, setSearchTarget] = useState<RoadEntry | null>(null);
+  const searchInputRef = useRef<TextInput>(null);
+
+  /** Fuzzy search results from local semarang-named-roads.json */
+  const searchResults = useMemo<RoadEntry[]>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q || q.length < 2) return [];
+    return ROAD_DATA
+      .filter((r) => r.n.toLowerCase().includes(q))
+      .sort((a, b) => {
+        // Prioritise exact-start matches
+        const aStart = a.n.toLowerCase().startsWith(q) ? 0 : 1;
+        const bStart = b.n.toLowerCase().startsWith(q) ? 0 : 1;
+        if (aStart !== bStart) return aStart - bStart;
+        // Then by road class importance
+        const order: Record<string, number> = {
+          motorway: 0, trunk: 1, primary: 2, secondary: 3, tertiary: 4,
+        };
+        return (order[a.h] ?? 5) - (order[b.h] ?? 5);
+      })
+      .slice(0, 8);
+  }, [searchQuery]);
+
+  /** Highway type → Indonesian label */
+  function highwayLabel(h: string): string {
+    const map: Record<string, string> = {
+      motorway: 'Tol', trunk: 'Arteri', primary: 'Primer',
+      secondary: 'Sekunder', tertiary: 'Tersier',
+      motorway_link: 'On/Off Tol', trunk_link: 'Percabangan',
+      primary_link: 'Percabangan', secondary_link: 'Percabangan',
+      tertiary_link: 'Percabangan',
+    };
+    return map[h] || 'Jalan';
+  }
+
+  /** Fly map to a road/zone coordinate via injectJavaScript */
+  const flyToLocation = useCallback((lon: number, lat: number, zoom = 15.5) => {
+    if (!isMapLoaded || !webViewRef.current) return;
+    webViewRef.current.injectJavaScript(`
+      if (window.flyToPoint) { window.flyToPoint(${lon}, ${lat}, ${zoom}); }
+      true;
+    `);
+  }, [isMapLoaded]);
+
+  /** Handle search result selection */
+  const handleSelectRoad = useCallback((road: RoadEntry) => {
+    setSearchQuery(road.n);
+    setIsSearchFocused(false);
+    setSearchTarget(road);
+    setSelectedZoneResult(null);
+    flyToLocation(road.lon, road.lat);
+    searchInputRef.current?.blur();
+  }, [flyToLocation]);
+
+  /** Navigate to searchTarget using external map app */
+  const handleNavigateToTarget = useCallback(() => {
+    if (!searchTarget) return;
+    openNavigation(
+      searchTarget.lat,
+      searchTarget.lon,
+      searchTarget.n,
+      userLocation?.lat,
+      userLocation?.lon,
+    );
+  }, [searchTarget, userLocation]);
+
+  /** Navigate to a zone result */
+  const handleNavigateToZone = useCallback((zone: NearbyZoneResult) => {
+    openNavigation(
+      zone.zone.latitude,
+      zone.zone.longitude,
+      zone.zone.name,
+      userLocation?.lat,
+      userLocation?.lon,
+    );
+  }, [userLocation]);
 
   useEffect(() => {
     if (userLocation) {
@@ -499,6 +652,18 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         duration: 800
       });
     };
+
+    // ── flyToPoint: navigate map to any coordinate (from search / zone tap) ──
+    window.flyToPoint = function(lon, lat, zoom) {
+      map.flyTo({
+        center: [lon, lat],
+        zoom: zoom || 15.5,
+        pitch: is3D ? 42 : 0,
+        bearing: is3D ? -8 : 0,
+        duration: 900,
+        essential: true
+      });
+    };
   </script>
 </body>
 </html>
@@ -577,10 +742,18 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
 
         {/* 2. UNIFIED COMPACT FROSTED HUD (ROW 1 + ROW 2) */}
         <View style={[styles.topUnifiedCard, { top: topPadding }]}>
-          {/* Row 1: Back Button, Horizontal Cities, Refresh */}
+          {/* Row 1: Back Button, Search Bar, Refresh */}
           <View style={styles.topRow}>
             <Pressable
-              onPress={onClose}
+              onPress={() => {
+                if (isSearchFocused) {
+                  setIsSearchFocused(false);
+                  setSearchQuery('');
+                  searchInputRef.current?.blur();
+                } else {
+                  onClose();
+                }
+              }}
               style={styles.circleIconButton}
               accessibilityLabel="Kembali"
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -588,45 +761,32 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               <Ionicons name="arrow-back" size={20} color="#0F172A" />
             </Pressable>
 
-            {/* City Selector Pills */}
-            <View style={styles.cityScrollWrapper}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.cityScrollContent}
-              >
-                {cityPresets.map((city) => {
-                  const isActive = activeCity.name === city.name;
-                  const isGPS = city.name.includes('GPS') || city.name.includes('Saya');
-                  return (
-                    <Pressable
-                      key={city.name}
-                      onPress={() => setActiveCity(city)}
-                      style={[
-                        styles.cityChip,
-                        isActive && styles.cityChipActive,
-                      ]}
-                    >
-                      {isGPS && (
-                        <Ionicons
-                          name="navigate"
-                          size={11}
-                          color={isActive ? '#FFFFFF' : '#1E6CEF'}
-                          style={{ marginRight: 4 }}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.cityChipText,
-                          isActive && styles.cityChipTextActive,
-                        ]}
-                      >
-                        {city.name}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+            {/* Search Bar (replaces city scroller when focused) */}
+            <View style={styles.searchBarWrapper}>
+              <Ionicons name="search" size={15} color="#64748B" style={{ marginRight: 7 }} />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchBarInput}
+                placeholder="Cari jalan, kawasan di Semarang..."
+                placeholderTextColor="#94A3B8"
+                value={searchQuery}
+                onChangeText={(t) => { setSearchQuery(t); setSearchTarget(null); }}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => {
+                  // small delay so result tap registers before blur hides list
+                  setTimeout(() => setIsSearchFocused(false), 180);
+                }}
+                returnKeyType="search"
+                autoCorrect={false}
+              />
+              {searchQuery.length > 0 && (
+                <Pressable
+                  onPress={() => { setSearchQuery(''); setSearchTarget(null); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={16} color="#94A3B8" />
+                </Pressable>
+              )}
             </View>
 
             <Pressable
@@ -643,14 +803,58 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
             </Pressable>
           </View>
 
-          {/* Row 2: Radius Selector & Compact AQI Pill in 1 line */}
-          <View style={styles.subRow}>
-            {/* Radius Options */}
-            <View style={styles.radiusPillBox}>
-              <Text style={styles.radiusLabel}>Radius:</Text>
-              {[5, 10, 20].map((r) => {
-                const isSelected = radiusKm === r;
-                return (
+          {/* Row 2: City Pills (hidden when searching) or Radius & AQI */}
+          {!isSearchFocused && !searchTarget && (
+            <>
+              {/* City Selector Pills */}
+              <View style={styles.cityScrollWrapper}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.cityScrollContent}
+                >
+                  {cityPresets.map((city) => {
+                    const isActive = activeCity.name === city.name;
+                    const isGPS = city.name.includes('GPS') || city.name.includes('Saya');
+                    return (
+                      <Pressable
+                        key={city.name}
+                        onPress={() => setActiveCity(city)}
+                        style={[
+                          styles.cityChip,
+                          isActive && styles.cityChipActive,
+                        ]}
+                      >
+                        {isGPS && (
+                          <Ionicons
+                            name="navigate"
+                            size={11}
+                            color={isActive ? '#FFFFFF' : '#1E6CEF'}
+                            style={{ marginRight: 4 }}
+                          />
+                        )}
+                        <Text
+                          style={[
+                            styles.cityChipText,
+                            isActive && styles.cityChipTextActive,
+                          ]}
+                        >
+                          {city.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Row 3: Radius Selector & Compact AQI Pill */}
+              <View style={styles.subRow}>
+                {/* Radius Options */}
+                <View style={styles.radiusPillBox}>
+                  <Text style={styles.radiusLabel}>Radius:</Text>
+                  {[5, 10, 20].map((r) => {
+                    const isSelected = radiusKm === r;
+                    return (
                   <Pressable
                     key={r}
                     onPress={() => setRadiusKm(r)}
@@ -690,6 +894,36 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               </View>
             )}
           </View>
+            </>
+          )}
+
+          {/* Search Results Dropdown — only when typing */}
+          {isSearchFocused && searchQuery.length >= 2 && searchResults.length > 0 && (
+            <View style={styles.searchDropdown}>
+              {searchResults.map((road, idx) => (
+                <Pressable
+                  key={`${road.n}-${idx}`}
+                  style={[
+                    styles.searchResultItem,
+                    idx < searchResults.length - 1 && styles.searchResultDivider,
+                  ]}
+                  onPress={() => handleSelectRoad(road)}
+                >
+                  <Ionicons
+                    name={road.h === 'motorway' || road.h === 'motorway_link' ? 'car-sport' : 'navigate-circle-outline'}
+                    size={16}
+                    color="#1E6CEF"
+                    style={{ marginRight: 8 }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.searchResultName} numberOfLines={1}>{road.n}</Text>
+                    <Text style={styles.searchResultType}>{highwayLabel(road.h)}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color="#CBD5E1" />
+                </Pressable>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* 3. NATIVE FLOATING 3D & RECENTER CONTROLS (DYNAMIC POSITION) */}
@@ -823,15 +1057,62 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               </View>
             )}
 
-            {/* Action Button: Prediksi 7 Hari */}
+            {/* Action Buttons: Navigasi + Prediksi 7 Hari */}
+            <View style={styles.actionButtonsRow}>
+              <Pressable
+                onPress={() => handleNavigateToZone(selectedZoneResult)}
+                style={styles.actionNavButton}
+              >
+                <Ionicons name="navigate" size={16} color="#FFFFFF" />
+                <Text style={styles.actionNavText}>Navigasi</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => handleOpenAnalysis(selectedZoneResult)}
+                style={styles.actionAnalysisButton}
+              >
+                <Text style={styles.actionAnalysisText}>
+                  Prediksi 7 Hari
+                </Text>
+                <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* 6. SEARCH TARGET CARD — shown after selecting a road from search */}
+        {searchTarget && !selectedZoneResult && (
+          <View style={[styles.detailCard, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.detailCardHeader}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text numberOfLines={1} style={styles.detailLocationName}>
+                  {searchTarget.n}
+                </Text>
+                <Text style={styles.detailDistanceText}>
+                  {highwayLabel(searchTarget.h)} • {searchTarget.lat.toFixed(5)}, {searchTarget.lon.toFixed(5)}
+                </Text>
+              </View>
+              <View style={[styles.impactBadge, { backgroundColor: '#EFF6FF', borderColor: '#1E6CEF' }]}>
+                <Text style={[styles.impactBadgeText, { color: '#1E6CEF' }]}>
+                  {highwayLabel(searchTarget.h)}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => { setSearchTarget(null); setSearchQuery(''); }}
+                style={styles.detailCloseButton}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={18} color="#64748B" />
+              </Pressable>
+            </View>
+
+            {/* Navigate button */}
             <Pressable
-              onPress={() => handleOpenAnalysis(selectedZoneResult)}
-              style={styles.actionAnalysisButton}
+              onPress={handleNavigateToTarget}
+              style={styles.actionNavButtonFull}
             >
-              <Text style={styles.actionAnalysisText}>
-                Lihat Analisis Prediksi 7 Hari
-              </Text>
-              <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+              <Ionicons name="navigate" size={18} color="#FFFFFF" />
+              <Text style={styles.actionNavFullText}>Mulai Navigasi ke Sini</Text>
             </Pressable>
           </View>
         )}
@@ -1141,19 +1422,114 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   actionAnalysisButton: {
-    marginTop: 14,
+    flex: 1,
     backgroundColor: '#0284C7',
     borderRadius: 14,
     paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
   },
   actionAnalysisText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
+  },
+
+  /* SEARCH BAR */
+  searchBarWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  searchBarInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F172A',
+    padding: 0,
+    margin: 0,
+  },
+
+  /* SEARCH DROPDOWN */
+  searchDropdown: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  searchResultDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  searchResultName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  searchResultType: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+
+  /* ACTION BUTTONS ROW */
+  actionButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  actionNavButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: '#10B981',
+  },
+  actionNavText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  /* SEARCH TARGET NAVIGATE FULL BUTTON */
+  actionNavButtonFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#1E6CEF',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginTop: 14,
+  },
+  actionNavFullText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

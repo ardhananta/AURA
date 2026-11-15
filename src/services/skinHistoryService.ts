@@ -1,5 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SkinScanData } from '@/types/ai';
+import {
+  AgenticPipelineSummary,
+  buildAgenticSummary,
+} from '@/components/skin/SkinAnalysisVisuals';
 
 const SKIN_HISTORY_STORAGE_KEY = '@aura_skin_scan_history_v1';
 const MAX_HISTORY_ITEMS = 30;
@@ -10,6 +14,7 @@ export interface SavedSkinScan {
   formattedDate: string;
   imageUri?: string;
   data: SkinScanData;
+  agenticSummary?: AgenticPipelineSummary;
 }
 
 function formatDateIndo(date: Date): string {
@@ -29,7 +34,12 @@ export const skinHistoryService = {
   /**
    * Menyimpan hasil scan kulit baru ke memori lokal HP
    */
-  async saveScan(data: SkinScanData, imageUri?: string): Promise<SavedSkinScan> {
+  async saveScan(
+    data: SkinScanData,
+    imageUri?: string,
+    agenticSummary?: AgenticPipelineSummary
+  ): Promise<SavedSkinScan> {
+    const resolvedSummary = agenticSummary || buildAgenticSummary(data);
     try {
       const now = new Date();
       const newScan: SavedSkinScan = {
@@ -38,6 +48,7 @@ export const skinHistoryService = {
         formattedDate: formatDateIndo(now),
         imageUri,
         data,
+        agenticSummary: resolvedSummary,
       };
 
       const existingHistory = await this.getHistory();
@@ -58,6 +69,7 @@ export const skinHistoryService = {
         formattedDate: formatDateIndo(new Date()),
         imageUri,
         data,
+        agenticSummary: resolvedSummary,
       };
     }
   },

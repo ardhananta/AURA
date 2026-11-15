@@ -1,5 +1,6 @@
 import { SemarangMapCard } from '@/components/dashboard/SemarangMapCard';
 import { FullscreenSemarangMapModal } from '@/components/dashboard/FullscreenSemarangMapModal';
+import { NavigationCardsSection } from '@/components/dashboard/NavigationCardsSection';
 import { AuraColors } from '@/constants/aura-theme';
 import { useAuth } from '@/context/auth-context';
 import { authApi } from '@/services/api';
@@ -338,88 +339,155 @@ export default function DashboardScreen() {
           outdoorMinutes={outdoorMinutes}
         />
 
-        {/* 2. THREE NAVIGATION BUTTONS (Group 723, Group 724, Group 725) */}
+        {/* 2. FOUR NAVIGATION BUTTONS (Group 723, Skin Analyst, Group 724, Group 725) */}
         <View
           style={{
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            paddingHorizontal: 10,
+            paddingHorizontal: 8,
             marginTop: 18,
           }}
         >
-          {/* Cek Kesehatan Paru */}
+          {/* 1. Cek Kesehatan Paru (Fitur AI Respirasi) */}
           <Pressable
             onPress={() => router.push('/lung-check')}
-            style={{ alignItems: 'center', flex: 1 }}
+            style={({ pressed }) => [
+              {
+                alignItems: 'center',
+                flex: 1,
+                opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.95 : 1 }],
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Cek Kesehatan Paru"
+            hitSlop={6}
           >
             <Image
               source={require('@/assets/homepage/Group 723.png')}
-              style={{ width: 88, height: 88 }}
+              style={{ width: 76, height: 76 }}
               contentFit="contain"
             />
             <Text
               style={{
                 color: '#1E293B',
-                fontSize: 12,
+                fontSize: 11.5,
                 fontWeight: '700',
                 textAlign: 'center',
-                marginTop: 8,
-                lineHeight: 16,
+                marginTop: 6,
+                lineHeight: 15,
               }}
             >
               Cek Kesehatan{'\n'}Paru
             </Text>
           </Pressable>
 
-          {/* Analisis Dampak Polusi (Navigasi dengan data GPS real-time) */}
+          {/* 2. Skin Analyst (Fitur AI Dermal VLM - Fitur Berbeda dari Cek Paru) */}
           <Pressable
-            onPress={navigateToPollutionImpact}
-            style={{ alignItems: 'center', flex: 1 }}
+            onPress={() => router.push('/skin-check')}
+            style={({ pressed }) => [
+              {
+                alignItems: 'center',
+                flex: 1,
+                opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.95 : 1 }],
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Skin Analyst"
+            hitSlop={6}
           >
             <Image
-              source={require('@/assets/homepage/Group 724.png')}
-              style={{ width: 88, height: 88 }}
+              source={require('@/assets/homepage/skin_analyst_icon.png')}
+              style={{ width: 76, height: 76 }}
               contentFit="contain"
             />
             <Text
               style={{
                 color: '#1E293B',
-                fontSize: 12,
+                fontSize: 11.5,
                 fontWeight: '700',
                 textAlign: 'center',
-                marginTop: 8,
-                lineHeight: 16,
+                marginTop: 6,
+                lineHeight: 15,
+              }}
+            >
+              Skin{'\n'}Analyst
+            </Text>
+          </Pressable>
+
+          {/* 3. Analisis Dampak Polusi (Navigasi dengan data GPS real-time) */}
+          <Pressable
+            onPress={navigateToPollutionImpact}
+            style={({ pressed }) => [
+              {
+                alignItems: 'center',
+                flex: 1,
+                opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.95 : 1 }],
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Analisis Dampak Polusi"
+            hitSlop={6}
+          >
+            <Image
+              source={require('@/assets/homepage/Group 724.png')}
+              style={{ width: 76, height: 76 }}
+              contentFit="contain"
+            />
+            <Text
+              style={{
+                color: '#1E293B',
+                fontSize: 11.5,
+                fontWeight: '700',
+                textAlign: 'center',
+                marginTop: 6,
+                lineHeight: 15,
               }}
             >
               Analisis Dampak{'\n'}Polusi
             </Text>
           </Pressable>
 
-          {/* Mulai Periksa (Navigasi ke Dokter & Rumah Sakit Mitra) */}
+          {/* 4. Mulai Periksa (Navigasi ke Dokter & Rumah Sakit Mitra) */}
           <Pressable
             onPress={() => router.push('/ceksekarang')}
-            style={{ alignItems: 'center', flex: 1 }}
+            style={({ pressed }) => [
+              {
+                alignItems: 'center',
+                flex: 1,
+                opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.95 : 1 }],
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Mulai Periksa Dokter"
+            hitSlop={6}
           >
             <Image
               source={require('@/assets/homepage/Group 725.png')}
-              style={{ width: 88, height: 88 }}
+              style={{ width: 76, height: 76 }}
               contentFit="contain"
             />
             <Text
               style={{
                 color: '#1E293B',
-                fontSize: 12,
+                fontSize: 11.5,
                 fontWeight: '700',
                 textAlign: 'center',
-                marginTop: 8,
-                lineHeight: 16,
+                marginTop: 6,
+                lineHeight: 15,
               }}
             >
-              Mulai Periksa
+              Mulai{'\n'}Periksa
             </Text>
           </Pressable>
         </View>
+
+        {/* 2.5 NAVIGATION & TRACKING CARDS */}
+        <NavigationCardsSection />
 
         {/* 3. DYNAMIC STATUS HORIZONTAL CAROUSEL CARDS */}
         <ScrollView
@@ -804,73 +872,121 @@ export default function DashboardScreen() {
           </LinearGradient>
         </Pressable>
 
-        {/* 4.5 FEATURE BANNER: SCAN KESEHATAN KULIT */}
-        <Pressable
-          onPress={() => router.push('/skin-check')}
-          style={{
-            marginHorizontal: 16,
-            marginTop: 14,
-            borderRadius: 16,
-            overflow: 'hidden',
-            backgroundColor: '#2563EB',
-            shadowColor: '#2563EB',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.18,
-            shadowRadius: 10,
-            elevation: 4,
-          }}
-        >
-          <LinearGradient
-            colors={['#38BDF8', '#2563EB', '#1D4ED8']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={{
-              padding: 14,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
-              <View
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 14,
-                  backgroundColor: 'rgba(255, 255, 255, 0.22)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginRight: 12,
-                }}
-              >
-                <Ionicons name="scan" size={24} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 13.5 }}>
-                  Scan Kesehatan Kulit
-                </Text>
-                <Text style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: 11, marginTop: 2, lineHeight: 15 }}>
-                  Deteksi iritasi & barier kulit akibat polusi via foto
-                </Text>
-              </View>
+        {/* 4.5 SECTION: DUA FITUR SKRINING AI (CEK PARU & SKIN ANALYST) */}
+        <View style={{ marginHorizontal: 16, marginTop: 22 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <View>
+              <Text style={{ color: '#0F172A', fontSize: 16, fontWeight: '800', letterSpacing: -0.3 }}>
+                Skrining Kesehatan AI
+              </Text>
+              <Text style={{ color: '#64748B', fontSize: 12, marginTop: 1 }}>
+                2 fitur deteksi dini mandiri berbasis kecerdasan buatan
+              </Text>
             </View>
+            <View style={{ backgroundColor: '#EFF6FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: '#BFDBFE' }}>
+              <Text style={{ color: '#2563EB', fontSize: 10.5, fontWeight: '800' }}>AI Screening</Text>
+            </View>
+          </View>
 
-            <View
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: 999,
-                paddingHorizontal: 16,
-                paddingVertical: 7,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.1,
-                elevation: 2,
-              }}
+          {/* DUA KARTU FITUR BERBEDA: PARU & KULIT */}
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            {/* FITUR 1: CEK KESEHATAN PARU */}
+            <Pressable
+              onPress={() => router.push('/lung-check')}
+              style={({ pressed }) => [
+                {
+                  flex: 1,
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: 20,
+                  padding: 14,
+                  borderWidth: 1.5,
+                  borderColor: '#E2E8F0',
+                  shadowColor: '#000000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.06,
+                  shadowRadius: 8,
+                  elevation: 3,
+                  justifyContent: 'space-between',
+                  opacity: pressed ? 0.88 : 1,
+                  transform: [{ scale: pressed ? 0.97 : 1 }],
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Mulai Tes Batuk Paru-Paru"
             >
-              <Text style={{ color: '#2563EB', fontWeight: '700', fontSize: 12 }}>Pindai</Text>
-            </View>
-          </LinearGradient>
-        </Pressable>
+              <View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons name="mic" size={22} color="#2563EB" />
+                  </View>
+                  <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 6, paddingVertical: 2.5, borderRadius: 6 }}>
+                    <Text style={{ color: '#1E40AF', fontSize: 9.5, fontWeight: '800' }}>ONNX AI</Text>
+                  </View>
+                </View>
+
+                <Text style={{ color: '#0F172A', fontSize: 14, fontWeight: '800', marginBottom: 3 }}>
+                  Cek Paru-Paru
+                </Text>
+                <Text style={{ color: '#64748B', fontSize: 11, lineHeight: 15 }} numberOfLines={2}>
+                  Analisis suara batuk & ISPA akibat polusi
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9' }}>
+                <Text style={{ color: '#2563EB', fontSize: 11.5, fontWeight: '800' }}>Tes Batuk</Text>
+                <Ionicons name="arrow-forward-circle" size={18} color="#2563EB" />
+              </View>
+            </Pressable>
+
+            {/* FITUR 2: SKIN ANALYST */}
+            <Pressable
+              onPress={() => router.push('/skin-check')}
+              style={({ pressed }) => [
+                {
+                  flex: 1,
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: 20,
+                  padding: 14,
+                  borderWidth: 1.5,
+                  borderColor: '#E2E8F0',
+                  shadowColor: '#000000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.06,
+                  shadowRadius: 8,
+                  elevation: 3,
+                  justifyContent: 'space-between',
+                  opacity: pressed ? 0.88 : 1,
+                  transform: [{ scale: pressed ? 0.97 : 1 }],
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Mulai Scan Kulit"
+            >
+              <View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: '#F0FDF4', alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons name="scan" size={22} color="#16A34A" />
+                  </View>
+                  <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2.5, borderRadius: 6 }}>
+                    <Text style={{ color: '#166534', fontSize: 9.5, fontWeight: '800' }}>VLM AI</Text>
+                  </View>
+                </View>
+
+                <Text style={{ color: '#0F172A', fontSize: 14, fontWeight: '800', marginBottom: 3 }}>
+                  Skin Analyst
+                </Text>
+                <Text style={{ color: '#64748B', fontSize: 11, lineHeight: 15 }} numberOfLines={2}>
+                  Deteksi barier kulit & iritasi polusi via foto
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9' }}>
+                <Text style={{ color: '#16A34A', fontSize: 11.5, fontWeight: '800' }}>Scan Kulit</Text>
+                <Ionicons name="arrow-forward-circle" size={18} color="#16A34A" />
+              </View>
+            </Pressable>
+          </View>
+        </View>
 
         {/* 5. DOCTOR RECOMMENDATION CARD (drbunga.png) - Doctor image over the top of card */}
         <View
