@@ -11,13 +11,16 @@ import {
   StatusBar as RNStatusBar,
   Platform,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SkinScanData } from '@/types/ai';
 import { skinHistoryService, SavedSkinScan } from '@/services/skinHistoryService';
+import {
+  SkinDifferenceTriplet,
+  buildAgenticSummary,
+} from '@/components/skin/SkinAnalysisVisuals';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -196,24 +199,50 @@ export default function SkinResultScreen() {
           <View style={styles.aiBadgeWrap}>
             <Ionicons name="shield-checkmark" size={14} color="#2563EB" />
             <Text style={styles.aiBadgeText}>
-              Groq AI {data.model_used || 'qwen/qwen3.8-27b'} • SCIN Validated
+              Agentic Skin AI • {data.model_used || 'qwen/qwen3.8-27b'} • SCIN Validated
             </Text>
           </View>
 
-          {/* Photo Thumbnail (If Available) */}
-          {currentScan?.imageUri ? (
-            <View style={styles.photoPreviewCard}>
-              <Image
-                source={{ uri: currentScan.imageUri }}
-                style={styles.photoThumb}
-                contentFit="cover"
-              />
-              <View style={styles.photoOverlayBadge}>
-                <Ionicons name="camera" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-                <Text style={styles.photoOverlayText}>Foto Terpindai</Text>
+          {/* ─── 3 Difference Images from Agentic AI Pipeline ─── */}
+          <SkinDifferenceTriplet
+            imageUri={currentScan?.imageUri}
+            data={data}
+            summary={currentScan?.agenticSummary}
+          />
+
+          {/* Compact Agentic Pipeline Telemetry Strip */}
+          {(() => {
+            const agentSummary =
+              currentScan?.agenticSummary || buildAgenticSummary(data);
+            return (
+              <View style={styles.pipelineMetricsRow}>
+                <View style={styles.pipelineMetricChip}>
+                  <Text style={styles.pipelineMetricVal}>
+                    {agentSummary.landmarksCount}
+                  </Text>
+                  <Text style={styles.pipelineMetricLabel}>Landmarks Mesh</Text>
+                </View>
+                <View style={styles.pipelineMetricChip}>
+                  <Text style={styles.pipelineMetricVal}>
+                    {agentSummary.microRegionsCount}+
+                  </Text>
+                  <Text style={styles.pipelineMetricLabel}>Mikro-Region</Text>
+                </View>
+                <View style={styles.pipelineMetricChip}>
+                  <Text style={styles.pipelineMetricVal}>
+                    {agentSummary.tZoneScore}/{agentSummary.uZoneScore}
+                  </Text>
+                  <Text style={styles.pipelineMetricLabel}>T-Zone / U-Zone</Text>
+                </View>
               </View>
-            </View>
-          ) : null}
+            );
+          })()}
+
+          {/* Final Analysis Section Label */}
+          <View style={styles.finalAnalysisHeader}>
+            <Ionicons name="analytics-outline" size={16} color="#0284C7" />
+            <Text style={styles.finalAnalysisTitle}>Hasil Analisis Akhir</Text>
+          </View>
 
           {/* Big Score Display */}
           <View style={styles.scoreBlock}>
@@ -579,6 +608,47 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1D4ED8',
     marginLeft: 6,
+  },
+  pipelineMetricsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 18,
+  },
+  pipelineMetricChip: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  pipelineMetricVal: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  pipelineMetricLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  finalAnalysisHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  finalAnalysisTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
   },
   photoPreviewCard: {
     width: '100%',

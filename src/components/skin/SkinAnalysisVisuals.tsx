@@ -18,7 +18,6 @@ import Svg, {
   Line,
   Mask,
   Path,
-  Polygon,
   RadialGradient as SvgRadialGradient,
   Rect,
   Stop,
@@ -139,19 +138,19 @@ const U_ZONE_RIGHT_PATH =
   'M 232 158 C 214 154, 188 162, 180 186 C 176 220, 182 264, 192 296 C 216 274, 228 240, 234 204 Z';
 
 interface MeshGeometry {
-  nodes: Array<{ x: number; y: number; key: boolean }>;
-  edges: Array<{ x1: number; y1: number; x2: number; y2: number }>;
-  patches: Array<{ x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }>;
+  nodes: { x: number; y: number; key: boolean }[];
+  edges: { x1: number; y1: number; x2: number; y2: number }[];
+  patches: { x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }[];
 }
 
 function buildFaceMeshGeometry(): MeshGeometry {
-  const nodes: Array<{ x: number; y: number; key: boolean }> = [];
-  const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const nodes: { x: number; y: number; key: boolean }[] = [];
+  const edges: { x1: number; y1: number; x2: number; y2: number }[] = [];
 
   // Build structured rings inside the anatomical contour
   const rows = 15;
   const cols = 13;
-  const grid: Array<Array<{ x: number; y: number } | null>> = [];
+  const grid: ({ x: number; y: number } | null)[][] = [];
 
   for (let r = 0; r < rows; r++) {
     const tY = r / (rows - 1);
@@ -163,7 +162,7 @@ function buildFaceMeshGeometry(): MeshGeometry {
         ? 44 + 48 * Math.sin((tY / 0.36) * (Math.PI / 2))
         : 92 * Math.max(0.22, Math.cos(norm * (Math.PI / 2.25)));
 
-    const rowArr: Array<{ x: number; y: number } | null> = [];
+    const rowArr: ({ x: number; y: number } | null)[] = [];
     for (let c = 0; c < cols; c++) {
       const tX = (c / (cols - 1)) * 2 - 1; // -1 to +1
       const x = 150 + tX * halfW;
@@ -214,7 +213,7 @@ function buildFaceMeshGeometry(): MeshGeometry {
   }
 
   // Build 384+ micro-patch cells clipped inside the face silhouette
-  const patches: Array<{ x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }> = [];
+  const patches: { x: number; y: number; w: number; h: number; zone: 'T' | 'U' | 'B' }[] = [];
   const stepX = 10;
   const stepY = 12;
   for (let py = 38; py < 344; py += stepY) {
@@ -334,13 +333,13 @@ export function FaceScanMaskOverlay({
     : '#60A5FA';
 
   return (
-    <View style={[StyleSheet.absoluteFillObject, styles.maskCenter]} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFill, styles.maskCenter]} pointerEvents="none">
       {/* Fullscreen dimmed mask around the anatomical face shape */}
       <Svg
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
       >
         <Defs>
           <Mask id="faceCutoutMask">
@@ -525,13 +524,13 @@ export function SkinDiffCanvas({
       {imageUri ? (
         <Image
           source={{ uri: imageUri }}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           contentFit="cover"
         />
       ) : (
         <LinearGradient
           colors={['#1E293B', '#0F172A']}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
         />
       )}
 
@@ -544,14 +543,14 @@ export function SkinDiffCanvas({
               'rgba(20, 184, 166, 0.16)',
               'rgba(2, 132, 199, 0.20)',
             ]}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
           <Svg
             width="100%"
             height="100%"
             viewBox="0 0 300 380"
             preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           >
             <Defs>
               <Mask id="prepIsoMask">
@@ -618,7 +617,7 @@ export function SkinDiffCanvas({
         <>
           <View
             style={[
-              StyleSheet.absoluteFillObject,
+              StyleSheet.absoluteFill,
               { backgroundColor: 'rgba(15, 23, 42, 0.30)' },
             ]}
           />
@@ -627,7 +626,7 @@ export function SkinDiffCanvas({
             height="100%"
             viewBox="0 0 300 380"
             preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           >
             {/* T-Zone & U-Zone Topographic Partition Polygons */}
             <Path
@@ -692,7 +691,7 @@ export function SkinDiffCanvas({
         <>
           <View
             style={[
-              StyleSheet.absoluteFillObject,
+              StyleSheet.absoluteFill,
               { backgroundColor: 'rgba(2, 6, 23, 0.34)' },
             ]}
           />
@@ -701,7 +700,7 @@ export function SkinDiffCanvas({
             height="100%"
             viewBox="0 0 300 380"
             preserveAspectRatio="xMidYMid slice"
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           >
             <Defs>
               <ClipPath id="facePatchClip">
@@ -814,7 +813,7 @@ export function SkinDifferenceTriplet({
     [data, summary]
   );
 
-  const cards: Array<{
+  const cards: {
     variant: SkinDiffVariant;
     stepNum: string;
     title: string;
@@ -823,7 +822,7 @@ export function SkinDifferenceTriplet({
     metricValue: string;
     accent: string;
     detailText: string;
-  }> = [
+  }[] = [
     {
       variant: 'preprocessing',
       stepNum: 'Citra 1',

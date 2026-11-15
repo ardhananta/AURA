@@ -52,7 +52,6 @@ export default function SkinCheckScreen() {
   useEffect(() => {
     if (state !== 'analyzing') return;
 
-    setPipelineStep(0);
     const timers: ReturnType<typeof setTimeout>[] = [];
     for (let i = 1; i < AGENTIC_PIPELINE_STEPS.length; i++) {
       const t = setTimeout(() => {
@@ -87,6 +86,7 @@ export default function SkinCheckScreen() {
     setPhotoUri(uri);
     setSavedScan(null);
     setErrorMessage(null);
+    setPipelineStep(0);
     setState('analyzing');
 
     // Collect real mobility waypoints context without dummy data
@@ -257,7 +257,7 @@ export default function SkinCheckScreen() {
       {(state === 'analyzing' || state === 'diff_ready') && (
         <View
           style={[
-            StyleSheet.absoluteFillObject,
+            StyleSheet.absoluteFill,
             { backgroundColor: 'rgba(2, 6, 23, 0.86)' },
           ]}
         />
