@@ -43,9 +43,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
-          "image": "./assets/Logo.png",
-          "imageWidth": 160
+          "backgroundColor": "#2B71EE",
+          "image": "./assets/images/Logo Aura Putih.png",
+          "imageWidth": 230
         }
       ],
       "expo-secure-store",

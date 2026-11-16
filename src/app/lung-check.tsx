@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -406,12 +406,24 @@ export default function LungCheckScreen() {
     };
   }, [state]);
 
+  const handleStop = useCallback(async () => {
+    try {
+      if (audioRecorder.isRecording) {
+        await audioRecorder.stop();
+        setRecordedUri(audioRecorder.uri);
+      }
+    } catch (err) {
+      console.warn('[CoughCheck] Record stop error:', err);
+    }
+    setState('analyzing');
+  }, [audioRecorder]);
+
   // Transition from listening to analyzing after 5s
   useEffect(() => {
     if (state === 'listening' && timer >= 5) {
       handleStop();
     }
-  }, [timer, state]);
+  }, [timer, state, handleStop]);
 
   // Process audio with ONNX ICBHI model (TANPA DUMMY DATA)
   useEffect(() => {
@@ -518,18 +530,6 @@ export default function LungCheckScreen() {
       setErrorMessage('Gagal mengaktifkan mikrofon: ' + (err?.message || 'Error'));
       setState('error');
     }
-  };
-
-  const handleStop = async () => {
-    try {
-      if (audioRecorder.isRecording) {
-        await audioRecorder.stop();
-        setRecordedUri(audioRecorder.uri);
-      }
-    } catch (err) {
-      console.warn('[CoughCheck] Record stop error:', err);
-    }
-    setState('analyzing');
   };
 
   const handleRetry = () => {
