@@ -1,5 +1,20 @@
 export type ImpactLevel = 'Aman' | 'Waspada' | 'Berbahaya';
 export type TrafficSeverity = 'Lancar' | 'Sedang' | 'Padat' | 'Sangat Padat';
+export type MapReportCategory =
+  | 'traffic'
+  | 'pollution'
+  | 'industrial'
+  | 'transit'
+  | 'weather'
+  | 'safe_zone';
+
+export interface WeatherSnapshot {
+  temperature_c: number;
+  humidity_percent: number;
+  wind_speed_kmh: number;
+  precipitation_mm: number;
+  condition: string;
+}
 
 export interface AirQuality {
   pm2_5: number;
@@ -35,6 +50,11 @@ export interface NearbyZoneResult {
   congestion_status: TrafficSeverity;
   impact_score: number;
   impact_level: ImpactLevel;
+  report_type?: MapReportCategory;
+  weather?: WeatherSnapshot;
+  source_tag?: string;
+  scraped_at?: string;
+  recommendations?: string[];
 }
 
 export interface NearbyZonesData {

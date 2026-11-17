@@ -1,11 +1,25 @@
-import React, { useMemo } from 'react';
-import { View, Text, Pressable, Dimensions, StyleSheet, ActivityIndicator, Platform, StatusBar } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Dimensions,
+  Platform,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NearbyZoneResult, ImpactLevel } from '@/types/zones';
+import { NearbyZoneResult } from '@/types/zones';
+import {
+  getMapMarkerSvgIcon,
+  getZoneMarkerColor,
+  getZoneMarkerGlow,
+} from '@/utils/map-marker-icons';
 
 export interface UserLocationProp {
   lat: number;
@@ -29,7 +43,6 @@ interface SemarangMapCardProps {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// ─── Cartoon Cloud SVG Component (Matches User Mockup) ───────────────────────
 function CartoonCloud({ width = 52, height = 30 }: { width?: number; height?: number }) {
   return (
     <Svg width={width} height={height} viewBox="0 0 52 30" fill="none">
@@ -41,63 +54,64 @@ function CartoonCloud({ width = 52, height = 30 }: { width?: number; height?: nu
   );
 }
 
-function getMarkerColor(level: ImpactLevel): string {
-  switch (level) {
-    case 'Aman':
-      return '#10B981';
-    case 'Waspada':
-      return '#F59E0B';
-    case 'Berbahaya':
-      return '#EF4444';
-    default:
-      return '#1E6CEF';
-  }
-}
-
-function getMarkerGlow(level: ImpactLevel): string {
-  switch (level) {
-    case 'Aman':
-      return 'rgba(16, 185, 129, 0.35)';
-    case 'Waspada':
-      return 'rgba(245, 158, 11, 0.35)';
-    case 'Berbahaya':
-      return 'rgba(239, 68, 68, 0.35)';
-    default:
-      return 'rgba(30, 108, 239, 0.35)';
-  }
+function serializeZonesForMap(zones: NearbyZoneResult[]) {
+  return zones.slice(0, 10).map((nz) => ({
+    id: nz.zone.id,
+    name: nz.zone.name,
+    lat: nz.zone.latitude,
+    lon: nz.zone.longitude,
+    color: getZoneMarkerColor(nz.impact_level, nz.report_type),
+    glow: getZoneMarkerGlow(nz.impact_level, nz.report_type),
+    iconSvg: getMapMarkerSvgIcon(nz.report_type),
+    aqi: nz.air_quality?.us_aqi ?? null,
+    congestion: nz.congestion_status,
+  }));
 }
 
 export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
   onSearchPress,
   onMapPress,
   onBannerPress,
-  onProfilePress,
   userLocation,
   nearbyZones = [],
   isLoading = false,
   userName = 'FREYA JAWANTARA',
   outdoorMinutes,
-  waktuDiJalan = 2,
 }) => {
   const insets = useSafeAreaInsets();
+  const webViewRef = useRef<WebView>(null);
+  const [isMapLoaded, setIsMapLoaded] = useState(false);
+
   const handleOpenMap = onMapPress || onSearchPress;
 
   const lat = userLocation?.lat ?? -6.9932;
   const lon = userLocation?.lon ?? 110.4203;
 
-  const topBarTop = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 14) + 6;
+  const topBarTop =
+    Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 14) + 6;
   const cardHeight = 356 + (insets.top > 0 ? insets.top : 16);
 
-  // MapLibre GL 3D GIS HTML Template with custom markers matching Semarang street geometry
+  // Push live center & scraped icon markers without reloading the map WebView
+  useEffect(() => {
+    if (!isMapLoaded || !webViewRef.current) return;
+    webViewRef.current.injectJavaScript(`
+      if (window.updateHomepageCenter) { window.updateHomepageCenter(${lon}, ${lat}); }
+      true;
+    `);
+  }, [lat, lon, isMapLoaded]);
+
+  useEffect(() => {
+    if (!isMapLoaded || !webViewRef.current) return;
+    const payload = JSON.stringify(serializeZonesForMap(nearbyZones));
+    webViewRef.current.injectJavaScript(`
+      if (window.updateHomepageZones) { window.updateHomepageZones(${payload}); }
+      true;
+    `);
+  }, [nearbyZones, isMapLoaded]);
+
+  // Initial static HTML template (updated dynamically via injectJavaScript)
   const mapHtml = useMemo(() => {
-    const zonesData = (nearbyZones.length > 0 ? nearbyZones : []).map((nz) => ({
-      lat: nz.zone.latitude,
-      lon: nz.zone.longitude,
-      color: getMarkerColor(nz.impact_level),
-      glow: getMarkerGlow(nz.impact_level),
-      name: nz.zone.name,
-      level: nz.impact_level,
-    }));
+    const initialZones = JSON.stringify(serializeZonesForMap(nearbyZones));
 
     return `
 <!DOCTYPE html>
@@ -112,50 +126,50 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
     body, html, #map { width: 100%; height: 100%; overflow: hidden; background: #E2E8F0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-attrib { display: none !important; }
 
-    /* Custom Red Location Pin */
-    .custom-red-pin {
-      width: 28px;
-      height: 36px;
+    /* Live Scraped Category Icon Pin */
+    .live-icon-pin {
       position: relative;
-      cursor: pointer;
       display: flex;
       flex-direction: column;
       align-items: center;
-      transition: transform 0.2s ease;
+      pointer-events: none;
     }
-    .custom-red-pin:hover {
-      transform: scale(1.15);
+    .pin-halo {
+      position: absolute;
+      top: -4px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      animation: pulseHalo 2.4s ease-in-out infinite;
     }
-    .pin-head {
-      width: 24px;
-      height: 24px;
-      background: #EF4444;
+    @keyframes pulseHalo {
+      0%, 100% { transform: scale(0.9); opacity: 0.65; }
+      50% { transform: scale(1.25); opacity: 0.2; }
+    }
+    .pin-badge {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
       border: 2px solid #FFFFFF;
-      border-radius: 50% 50% 50% 0;
-      transform: rotate(-45deg);
-      box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.32);
       display: flex;
       align-items: center;
       justify-content: center;
-    }
-    .pin-inner-circle {
-      width: 8px;
-      height: 8px;
-      background: #FFFFFF;
-      border-radius: 50%;
+      z-index: 2;
     }
     .pin-label {
-      position: absolute;
-      top: 28px;
-      background: rgba(15, 23, 42, 0.85);
+      margin-top: 3px;
+      background: rgba(15, 23, 42, 0.84);
       color: #FFFFFF;
-      font-size: 8px;
+      font-size: 8.5px;
       font-weight: 700;
-      padding: 2px 5px;
-      border-radius: 4px;
+      padding: 2px 6px;
+      border-radius: 999px;
       white-space: nowrap;
-      pointer-events: none;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+      max-width: 112px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.22);
     }
 
     /* User Realtime Radar Pulse */
@@ -184,7 +198,6 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
       box-shadow: 0 2px 6px rgba(30, 108, 239, 0.5);
       z-index: 2;
     }
-
     @keyframes radarPing {
       0% { transform: scale(0.4); opacity: 0.9; }
       75%, 100% { transform: scale(1.4); opacity: 0; }
@@ -193,11 +206,11 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
 </head>
 <body>
   <div id="map"></div>
-
   <script>
     var lat = ${lat};
     var lon = ${lon};
-    var zones = ${JSON.stringify(zonesData)};
+    var zoneMarkers = [];
+    var userMarker = null;
 
     var map = new maplibregl.Map({
       container: 'map',
@@ -206,9 +219,7 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
         sources: {
           'osm-tiles': {
             type: 'raster',
-            tiles: [
-              'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-            ],
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
             tileSize: 256,
             attribution: '© OpenStreetMap contributors'
           }
@@ -224,47 +235,60 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
         ]
       },
       center: [lon, lat],
-      zoom: 13.4,
+      zoom: 13.2,
       pitch: 28,
       bearing: -5,
       interactive: false,
       attributionControl: false
     });
 
+    function renderZonePins(list) {
+      zoneMarkers.forEach(function(m) { m.remove(); });
+      zoneMarkers = [];
+      (list || []).forEach(function(z) {
+        var el = document.createElement('div');
+        el.className = 'live-icon-pin';
+        el.innerHTML =
+          '<div class="pin-halo" style="background:' + z.glow + '"></div>' +
+          '<div class="pin-badge" style="background:' + z.color + '">' + z.iconSvg + '</div>' +
+          '<div class="pin-label">' + z.name + '</div>';
+        var marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([z.lon, z.lat])
+          .addTo(map);
+        zoneMarkers.push(marker);
+      });
+    }
+
     map.on('load', function() {
-      // 1. User Position Pulsing Radar
       var userEl = document.createElement('div');
       userEl.className = 'user-radar-container';
       userEl.innerHTML = '<div class="user-radar-wave"></div><div class="user-radar-core"></div>';
-      new maplibregl.Marker({ element: userEl })
+      userMarker = new maplibregl.Marker({ element: userEl })
         .setLngLat([lon, lat])
         .addTo(map);
 
-      // 2. Semarang Iconic Landmarks (Sam Poo Kong, Stadion Jatidiri, Djomblang)
-      var landmarks = [
-        { name: 'SAM POO KONG', lon: 110.3985, lat: -6.9965 },
-        { name: 'Masjid Agung Jawa Tengah (MAJT)', lon: 110.4455, lat: -6.9839 },
-        { name: 'Stadion Jatidiri', lon: 110.4074, lat: -7.0210 },
-        { name: 'PERUM SINGATARA', lon: 110.4475, lat: -7.0095 },
-        { name: 'Simpang Lima', lon: 110.4227, lat: -6.9904 }
-      ];
+      renderZonePins(${initialZones});
 
-      landmarks.forEach(function(lm) {
-        var el = document.createElement('div');
-        el.className = 'custom-red-pin';
-        el.innerHTML = '<div class="pin-head"><div class="pin-inner-circle"></div></div><div class="pin-label">' + lm.name + '</div>';
-        new maplibregl.Marker({ element: el, anchor: 'bottom' })
-          .setLngLat([lm.lon, lm.lat])
-          .addTo(map);
-      });
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_LOADED' }));
+      }
     });
+
+    window.updateHomepageCenter = function(newLon, newLat) {
+      if (userMarker) userMarker.setLngLat([newLon, newLat]);
+      map.jumpTo({ center: [newLon, newLat] });
+    };
+
+    window.updateHomepageZones = function(newZones) {
+      renderZonePins(newZones);
+    };
   </script>
 </body>
 </html>
     `;
-  }, [lat, lon, nearbyZones]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Perhitungan Durasi di Luar Ruangan Riil (Hanya dari data aktual pelacakan)
   const { displayValue, displayUnit } = useMemo(() => {
     const mins = typeof outdoorMinutes === 'number' ? outdoorMinutes : 0;
 
@@ -285,9 +309,18 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
     <View style={[styles.container, { height: cardHeight }]}>
       {/* 1. 3D GIS MAP VIEW EMBED */}
       <WebView
+        ref={webViewRef}
         originWhitelist={['*']}
         source={{ html: mapHtml }}
         style={styles.webView}
+        onMessage={(event) => {
+          try {
+            const msg = JSON.parse(event.nativeEvent.data);
+            if (msg?.type === 'MAP_LOADED') setIsMapLoaded(true);
+          } catch {
+            // Ignore malformed messages
+          }
+        }}
         scrollEnabled={false}
         overScrollMode="never"
         javaScriptEnabled={true}
@@ -306,8 +339,15 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
         >
           <Ionicons name="search" size={21} color="#2563EB" style={{ marginRight: 10 }} />
           <Text style={styles.searchPlaceholderText}>Temukan lokasi anda...</Text>
-          {isLoading && (
+          {isLoading ? (
             <ActivityIndicator size="small" color="#2563EB" style={{ marginLeft: 'auto' }} />
+          ) : (
+            <View style={styles.liveChip}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveChipText}>
+                {nearbyZones.length > 0 ? `${nearbyZones.length} Titik` : 'Live'}
+              </Text>
+            </View>
           )}
         </Pressable>
       </View>
@@ -317,7 +357,7 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
         onPress={handleOpenMap}
         style={[styles.middleMapTapArea, { top: topBarTop + 54 }]}
         accessibilityRole="button"
-        accessibilityLabel="Buka Peta Interaktif"
+        accessibilityLabel="Buka Peta Interaktif & Laporan Real-Time"
       />
 
       {/* 4. BOTTOM WELCOME & OUTDOOR DURATION BADGE BAR */}
@@ -334,24 +374,17 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
             end={{ x: 1, y: 0.8 }}
             style={styles.welcomeBannerGradient}
           >
-            {/* Decorative Cartoon Clouds on Right (Exact layout matching mockup) */}
+            {/* Decorative Cartoon Clouds on Right */}
             <View style={styles.cloudDecorationContainer} pointerEvents="none">
-              {/* Cloud 1 (Top right) */}
               <View style={styles.cloud1Position}>
                 <CartoonCloud width={50} height={28} />
               </View>
-
-              {/* Cloud 2 (Peeking from far right edge) */}
               <View style={styles.cloud2Position}>
                 <CartoonCloud width={48} height={28} />
               </View>
-
-              {/* Cloud 3 (Floating in middle) */}
               <View style={styles.cloud3Position}>
                 <CartoonCloud width={52} height={29} />
               </View>
-
-              {/* Cloud 4 (Peeking from bottom edge) */}
               <View style={styles.cloud4Position}>
                 <CartoonCloud width={54} height={30} />
               </View>
@@ -364,10 +397,8 @@ export const SemarangMapCard: React.FC<SemarangMapCardProps> = ({
                 {userName ? userName.toUpperCase() : 'FREYA JAWANTARA'}
               </Text>
 
-              {/* Thin White Divider Line */}
               <View style={styles.welcomeDividerLine} />
 
-              {/* Duration Row */}
               <View style={styles.durationRow}>
                 <View>
                   <Text style={styles.durationItalicText}>Lama Waktu Di</Text>
@@ -429,6 +460,29 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     fontWeight: '500',
     letterSpacing: -0.2,
+    flex: 1,
+  },
+  liveChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 9,
+    paddingVertical: 3.5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  liveChipText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#1E6CEF',
   },
 
   /* Middle map touch area */
@@ -466,7 +520,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  /* Decorative Clouds Container on Right */
   cloudDecorationContainer: {
     position: 'absolute',
     top: 0,
@@ -502,7 +555,6 @@ const styles = StyleSheet.create({
     opacity: 0.98,
   },
 
-  /* Left Welcome Content */
   welcomeLeftContent: {
     justifyContent: 'center',
     zIndex: 10,
@@ -528,7 +580,6 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
 
-  /* Duration row at bottom of banner */
   durationRow: {
     flexDirection: 'row',
     alignItems: 'center',

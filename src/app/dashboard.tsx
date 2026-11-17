@@ -4,6 +4,7 @@ import { AuraColors } from '@/constants/aura-theme';
 import { useAuth } from '@/context/auth-context';
 import { authApi } from '@/services/api';
 import { zonesApi } from '@/services/zonesApi';
+import { mapScraperService } from '@/services/mapScraperService';
 import { locationService } from '@/services/locationService';
 import { isProfileComplete } from '@/types/auth';
 import { DailyForecast, ImpactLevel, NearbyZoneResult, WeeklyAnalysisResponse } from '@/types/zones';
@@ -118,8 +119,13 @@ export default function DashboardScreen() {
       }
       setIsLoadingLocation(false);
 
-      // 1. Fetch dynamic nearby hotspots for the interactive map
-      const nearbyRes = await zonesApi.getNearbyZones(activeCoords.lat, activeCoords.lon, 25);
+      // 1. Scrape real-time nearby hotspots (traffic, pollution, weather, transit) for the interactive map
+      const nearbyRes = await mapScraperService.scrapeRealtimeRegion(
+        activeCoords.lat,
+        activeCoords.lon,
+        10,
+        activeCoords.name
+      );
       if (nearbyRes && nearbyRes.nearby_zones) {
         setNearbyZones(nearbyRes.nearby_zones);
       }

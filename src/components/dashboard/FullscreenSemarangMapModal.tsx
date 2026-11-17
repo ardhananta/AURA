@@ -16,24 +16,23 @@ import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { zonesApi } from '@/services/zonesApi';
+import semarangRoads from '@/data/semarang-named-roads.json';
+import { mapScraperService, RoadSearchEntry } from '@/services/mapScraperService';
 import {
+  ImpactLevel,
+  MapReportCategory,
   NearbyZonesData,
   NearbyZoneResult,
-  ImpactLevel,
 } from '@/types/zones';
+import {
+  getMapMarkerSvgIcon,
+  getReportCategoryLabel,
+  getReportIoniconName,
+  getZoneMarkerColor,
+  getZoneMarkerGlow,
+} from '@/utils/map-marker-icons';
 
-// ─── Semarang Named Roads from GeoPackage (OSM) ──────────────────────────────
-import semarangRoads from '@/data/semarang-named-roads.json';
-
-interface RoadEntry {
-  n: string;   // name
-  h: string;   // highway type
-  lat: number;
-  lon: number;
-}
-
-const ROAD_DATA = semarangRoads as RoadEntry[];
+const ROAD_DATA = semarangRoads as RoadSearchEntry[];
 
 interface FullscreenSemarangMapModalProps {
   visible: boolean;
@@ -50,35 +49,27 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BASE_CITY_PRESETS = [
   { name: 'Semarang', lat: -6.988, lon: 110.415 },
   { name: 'Jakarta', lat: -6.2088, lon: 106.8229 },
-  { name: 'Surabaya', lat: -7.2654, lon: 112.7483 },
-  { name: 'Bandung', lat: -6.9025, lon: 107.6186 },
+  { name: 'Bandung', lat: -6.9175, lon: 107.6191 },
+  { name: 'Surabaya', lat: -7.2575, lon: 112.7521 },
+  { name: 'Yogyakarta', lat: -7.7956, lon: 110.3695 },
+  { name: 'Denpasar', lat: -8.6705, lon: 115.2126 },
+  { name: 'Medan', lat: 3.5952, lon: 98.6722 },
 ];
 
-function getMarkerColor(level: ImpactLevel): string {
-  switch (level) {
-    case 'Aman':
-      return '#10B981';
-    case 'Waspada':
-      return '#F59E0B';
-    case 'Berbahaya':
-      return '#EF4444';
-    default:
-      return '#1E6CEF';
-  }
-}
+type CategoryFilterKey = 'all' | MapReportCategory;
 
-function getMarkerGlow(level: ImpactLevel): string {
-  switch (level) {
-    case 'Aman':
-      return 'rgba(16, 185, 129, 0.4)';
-    case 'Waspada':
-      return 'rgba(245, 158, 11, 0.4)';
-    case 'Berbahaya':
-      return 'rgba(239, 68, 68, 0.4)';
-    default:
-      return 'rgba(30, 108, 239, 0.4)';
-  }
-}
+const CATEGORY_FILTERS: {
+  key: CategoryFilterKey;
+  label: string;
+  icon: 'layers' | 'car' | 'cloud' | 'business' | 'bus' | 'partly-sunny';
+}[] = [
+  { key: 'all', label: 'Semua', icon: 'layers' },
+  { key: 'traffic', label: 'Macet', icon: 'car' },
+  { key: 'pollution', label: 'Polusi', icon: 'cloud' },
+  { key: 'industrial', label: 'Industri', icon: 'business' },
+  { key: 'transit', label: 'Transit', icon: 'bus' },
+  { key: 'weather', label: 'Cuaca', icon: 'partly-sunny' },
+];
 
 function getBadgeBg(level: ImpactLevel): string {
   switch (level) {
@@ -91,6 +82,22 @@ function getBadgeBg(level: ImpactLevel): string {
     default:
       return '#EFF6FF';
   }
+}
+
+function serializeForMap(zones: NearbyZoneResult[]) {
+  return zones.map((nz) => ({
+    id: nz.zone.id,
+    name: nz.zone.name,
+    lat: nz.zone.latitude,
+    lon: nz.zone.longitude,
+    impactLevel: nz.impact_level,
+    reportType: nz.report_type || 'pollution',
+    color: getZoneMarkerColor(nz.impact_level, nz.report_type),
+    glow: getZoneMarkerGlow(nz.impact_level, nz.report_type),
+    iconSvg: getMapMarkerSvgIcon(nz.report_type),
+    aqi: nz.air_quality?.us_aqi ?? null,
+    congestion: nz.congestion_status,
+  }));
 }
 
 export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProps> = ({
@@ -114,70 +121,99 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
 
   const [activeCity, setActiveCity] = useState(cityPresets[0]);
   const [radiusKm, setRadiusKm] = useState<number>(10);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilterKey>('all');
   const [nearbyData, setNearbyData] = useState<NearbyZonesData | null>(null);
   const [selectedZoneResult, setSelectedZoneResult] = useState<NearbyZoneResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isInspectingPoint, setIsInspectingPoint] = useState(false);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [is3DMode, setIs3DMode] = useState(true);
+  const [pannedCenter, setPannedCenter] = useState<{ lat: number; lon: number } | null>(null);
 
-  // ─── Search & Navigation State ───────────────────────────────────────────────
+  // ─── Global Search & Navigation State ───────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [searchTarget, setSearchTarget] = useState<RoadEntry | null>(null);
+  const [searchResults, setSearchResults] = useState<RoadSearchEntry[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchTarget, setSearchTarget] = useState<RoadSearchEntry | null>(null);
   const searchInputRef = useRef<TextInput>(null);
 
-  /** Fuzzy search results from local semarang-named-roads.json */
-  const searchResults = useMemo<RoadEntry[]>(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q || q.length < 2) return [];
-    return ROAD_DATA
-      .filter((r) => r.n.toLowerCase().includes(q))
-      .sort((a, b) => {
-        // Prioritise exact-start matches
-        const aStart = a.n.toLowerCase().startsWith(q) ? 0 : 1;
-        const bStart = b.n.toLowerCase().startsWith(q) ? 0 : 1;
-        if (aStart !== bStart) return aStart - bStart;
-        // Then by road class importance
-        const order: Record<string, number> = {
-          motorway: 0, trunk: 1, primary: 2, secondary: 3, tertiary: 4,
-        };
-        return (order[a.h] ?? 5) - (order[b.h] ?? 5);
-      })
-      .slice(0, 8);
+  // Filtered zones based on category chip
+  const displayedZones = useMemo(() => {
+    const list = nearbyData?.nearby_zones || [];
+    if (categoryFilter === 'all') return list;
+    return list.filter((z) => (z.report_type || 'pollution') === categoryFilter);
+  }, [nearbyData, categoryFilter]);
+
+  // Debounced local + global Nominatim search (works for Semarang & all other regions)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const results = await mapScraperService.searchLocationsGlobal(q, ROAD_DATA);
+        if (!cancelled) {
+          setSearchResults(results);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSearching(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [searchQuery]);
 
-  /** Highway type → Indonesian label */
   function highwayLabel(h: string): string {
     const map: Record<string, string> = {
-      motorway: 'Tol', trunk: 'Arteri', primary: 'Primer',
-      secondary: 'Sekunder', tertiary: 'Tersier',
-      motorway_link: 'On/Off Tol', trunk_link: 'Percabangan',
-      primary_link: 'Percabangan', secondary_link: 'Percabangan',
-      tertiary_link: 'Percabangan',
+      motorway: 'Tol',
+      trunk: 'Arteri',
+      primary: 'Jalan Utama',
+      secondary: 'Sekunder',
+      tertiary: 'Tersier',
+      city: 'Kota',
+      administrative: 'Wilayah',
+      suburb: 'Kecamatan',
+      village: 'Kelurahan',
     };
-    return map[h] || 'Jalan';
+    return map[h] || 'Lokasi / Wilayah';
   }
 
-  /** Fly map to a road/zone coordinate via injectJavaScript */
-  const flyToLocation = useCallback((lon: number, lat: number, zoom = 15.5) => {
-    if (!isMapLoaded || !webViewRef.current) return;
-    webViewRef.current.injectJavaScript(`
-      if (window.flyToPoint) { window.flyToPoint(${lon}, ${lat}, ${zoom}); }
-      true;
-    `);
-  }, [isMapLoaded]);
+  const flyToLocation = useCallback(
+    (lon: number, lat: number, zoom = 14.2) => {
+      if (!isMapLoaded || !webViewRef.current) return;
+      webViewRef.current.injectJavaScript(`
+        if (window.flyToPoint) { window.flyToPoint(${lon}, ${lat}, ${zoom}); }
+        true;
+      `);
+    },
+    [isMapLoaded]
+  );
 
-  /** Handle search result selection */
-  const handleSelectRoad = useCallback((road: RoadEntry) => {
-    setSearchQuery(road.n);
-    setIsSearchFocused(false);
-    setSearchTarget(road);
-    setSelectedZoneResult(null);
-    flyToLocation(road.lon, road.lat);
-    searchInputRef.current?.blur();
-  }, [flyToLocation]);
+  // Selecting any road/city from search jumps there AND scrapes real-time reports for that region
+  const handleSelectRoad = useCallback(
+    (road: RoadSearchEntry) => {
+      setSearchQuery(road.n);
+      setIsSearchFocused(false);
+      setSearchTarget(road);
+      setSelectedZoneResult(null);
+      setPannedCenter(null);
+      setActiveCity({ name: road.n, lat: road.lat, lon: road.lon });
+      flyToLocation(road.lon, road.lat, road.isGlobal ? 13.5 : 15.0);
+      searchInputRef.current?.blur();
+    },
+    [flyToLocation]
+  );
 
-  /** Navigate to searchTarget using in-app Universal Navigation (OSM + Semarang GPKG) */
   const handleNavigateToTarget = useCallback(() => {
     if (!searchTarget) return;
     onClose();
@@ -191,68 +227,74 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     });
   }, [searchTarget, onClose, router]);
 
-  /** Navigate to a zone result using in-app Universal Navigation */
-  const handleNavigateToZone = useCallback((zone: NearbyZoneResult) => {
-    onClose();
-    router.push({
-      pathname: '/universal-navigation',
-      params: {
-        destLat: String(zone.zone.latitude),
-        destLon: String(zone.zone.longitude),
-        destName: zone.zone.name,
-      },
-    });
-  }, [onClose, router]);
+  const handleNavigateToZone = useCallback(
+    (zone: NearbyZoneResult) => {
+      onClose();
+      router.push({
+        pathname: '/universal-navigation',
+        params: {
+          destLat: String(zone.zone.latitude),
+          destLon: String(zone.zone.longitude),
+          destName: zone.zone.name,
+        },
+      });
+    },
+    [onClose, router]
+  );
 
-  /** Open Universal Navigation directly from the map modal */
   const handleOpenUniversalNavigation = useCallback(() => {
     onClose();
     router.push('/universal-navigation');
   }, [onClose, router]);
-
-  useEffect(() => {
-    if (userLocation) {
-      setActiveCity({
-        name: userLocation.name || 'Lokasi Saya (GPS)',
-        lat: userLocation.lat,
-        lon: userLocation.lon,
-      });
-    }
-  }, [userLocation]);
 
   const topPadding =
     Platform.OS === 'android'
       ? (StatusBar.currentHeight || 24) + 8
       : Math.max(insets.top, 14);
 
-  const loadNearbyHotspots = useCallback(async () => {
+  const loadRealtimeScrapedData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await zonesApi.getNearbyZones(
+      const data = await mapScraperService.scrapeRealtimeRegion(
         activeCity.lat,
         activeCity.lon,
-        radiusKm
+        radiusKm,
+        activeCity.name
       );
       setNearbyData(data);
+      setPannedCenter(null);
       if (data.nearby_zones && data.nearby_zones.length > 0) {
-        setSelectedZoneResult(data.nearby_zones[0]);
-      } else {
-        setSelectedZoneResult(null);
+        setSelectedZoneResult((prev) => prev ?? data.nearby_zones[0]);
       }
     } catch (err: any) {
-      console.warn('[MapModal] Failed fetching nearby zones:', err);
+      console.warn('[MapModal] Failed scraping region data:', err);
     } finally {
       setIsLoading(false);
     }
   }, [activeCity, radiusKm]);
 
   useEffect(() => {
-    if (visible) {
-      loadNearbyHotspots();
-    }
-  }, [visible, loadNearbyHotspots]);
+    if (!visible) return;
+    let active = true;
+    mapScraperService
+      .scrapeRealtimeRegion(activeCity.lat, activeCity.lon, radiusKm, activeCity.name)
+      .then((data) => {
+        if (!active) return;
+        setNearbyData(data);
+        setPannedCenter(null);
+        if (data.nearby_zones && data.nearby_zones.length > 0) {
+          setSelectedZoneResult(data.nearby_zones[0]);
+        }
+      })
+      .catch((err: any) => {
+        console.warn('[MapModal] Failed scraping region data:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [visible, activeCity, radiusKm]);
 
-  // Reactive updates without full WebView reload
+  // Update map radius layer reactively
   useEffect(() => {
     if (isMapLoaded && webViewRef.current) {
       webViewRef.current.injectJavaScript(`
@@ -262,27 +304,18 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     }
   }, [radiusKm, isMapLoaded]);
 
+  // Update plotted icon markers when scraped zones or category filter change
   useEffect(() => {
-    if (isMapLoaded && webViewRef.current && nearbyData) {
-      const zonesJson = JSON.stringify(
-        (nearbyData.nearby_zones || []).map((nz) => ({
-          id: nz.zone.id,
-          name: nz.zone.name,
-          lat: nz.zone.latitude,
-          lon: nz.zone.longitude,
-          impactLevel: nz.impact_level,
-          color: getMarkerColor(nz.impact_level),
-          glow: getMarkerGlow(nz.impact_level),
-          congestion: nz.congestion_status,
-        }))
-      );
+    if (isMapLoaded && webViewRef.current) {
+      const zonesJson = JSON.stringify(serializeForMap(displayedZones));
       webViewRef.current.injectJavaScript(`
         if (window.updateZones) { window.updateZones(${zonesJson}); }
         true;
       `);
     }
-  }, [nearbyData, isMapLoaded]);
+  }, [displayedZones, isMapLoaded]);
 
+  // Move map center when city changes
   useEffect(() => {
     if (isMapLoaded && webViewRef.current) {
       webViewRef.current.injectJavaScript(`
@@ -292,20 +325,19 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     }
   }, [activeCity, isMapLoaded, radiusKm]);
 
-  // MapLibre GL 3D GIS HTML Initial Template
+  const handleScanMovedArea = useCallback(() => {
+    if (!pannedCenter) return;
+    setSearchTarget(null);
+    setActiveCity({
+      name: `Area (${pannedCenter.lat.toFixed(2)}, ${pannedCenter.lon.toFixed(2)})`,
+      lat: pannedCenter.lat,
+      lon: pannedCenter.lon,
+    });
+    setPannedCenter(null);
+  }, [pannedCenter]);
+
   const mapHtml = useMemo(() => {
-    const initialZones = JSON.stringify(
-      (nearbyData?.nearby_zones || []).map((nz) => ({
-        id: nz.zone.id,
-        name: nz.zone.name,
-        lat: nz.zone.latitude,
-        lon: nz.zone.longitude,
-        impactLevel: nz.impact_level,
-        color: getMarkerColor(nz.impact_level),
-        glow: getMarkerGlow(nz.impact_level),
-        congestion: nz.congestion_status,
-      }))
-    );
+    const initialZones = JSON.stringify(serializeForMap(displayedZones));
 
     return `
 <!DOCTYPE html>
@@ -352,7 +384,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
       z-index: 2;
     }
 
-    /* Hotspot Aura Pin */
+    /* Hotspot Category Icon Pin */
     .hotspot-wrapper {
       position: relative;
       display: flex;
@@ -363,40 +395,46 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
       transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     .hotspot-wrapper:active {
-      transform: scale(1.15);
+      transform: scale(1.14);
     }
     .hotspot-halo {
       position: absolute;
-      width: 34px;
-      height: 34px;
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
-      top: -5px;
+      top: -6px;
       animation: haloPulse 2.2s infinite ease-in-out;
     }
     @keyframes haloPulse {
-      0%, 100% { transform: scale(0.92); opacity: 0.6; }
-      50% { transform: scale(1.3); opacity: 0.2; }
+      0%, 100% { transform: scale(0.9); opacity: 0.6; }
+      50% { transform: scale(1.26); opacity: 0.2; }
     }
     .hotspot-core {
-      width: 20px;
-      height: 20px;
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       border: 2.5px solid #FFFFFF;
-      box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 3px 9px rgba(15, 23, 42, 0.34);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       z-index: 2;
     }
     .hotspot-label {
       background: rgba(255, 255, 255, 0.96);
       backdrop-filter: blur(4px);
       border-radius: 999px;
-      padding: 3px 8px;
-      font-size: 10.5px;
+      padding: 2.5px 8px;
+      font-size: 10px;
       font-weight: 800;
       color: #0F172A;
       box-shadow: 0 2px 6px rgba(0,0,0,0.16);
       white-space: nowrap;
+      max-width: 145px;
+      overflow: hidden;
+      text-overflow: ellipsis;
       margin-top: 4px;
-      border: 1px solid rgba(0,0,0,0.06);
+      border: 1px solid rgba(15, 23, 42, 0.08);
     }
   </style>
 </head>
@@ -410,6 +448,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     var is3D = true;
     var currentMarkers = [];
     var centerMarker = null;
+    var lastMarkerTapMs = 0;
 
     function createGeoJSONCircle(center, km, points) {
       if (!points) points = 64;
@@ -442,9 +481,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         sources: {
           'osm-tiles': {
             type: 'raster',
-            tiles: [
-              'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-            ],
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
             tileSize: 256,
             attribution: '© OpenStreetMap contributors'
           }
@@ -460,9 +497,9 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         ]
       },
       center: [centerLon, centerLat],
-      zoom: 13.2,
-      pitch: 38,
-      bearing: -8,
+      zoom: 13.0,
+      pitch: 36,
+      bearing: -6,
       maxPitch: 65,
       attributionControl: false
     });
@@ -470,17 +507,20 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     function addHotspotMarker(z) {
       var el = document.createElement('div');
       el.className = 'hotspot-wrapper';
-      el.innerHTML = '<div class="hotspot-halo" style="background: ' + z.glow + '"></div>' +
-                     '<div class="hotspot-core" style="background: ' + z.color + '"></div>' +
-                     '<div class="hotspot-label">' + z.name + '</div>';
+      var aqiTag = z.aqi ? (' • ' + z.aqi) : '';
+      el.innerHTML =
+        '<div class="hotspot-halo" style="background:' + z.glow + '"></div>' +
+        '<div class="hotspot-core" style="background:' + z.color + '">' + z.iconSvg + '</div>' +
+        '<div class="hotspot-label">' + z.name + aqiTag + '</div>';
 
       function handleSelect(e) {
+        lastMarkerTapMs = Date.now();
         if (e) { e.stopPropagation(); }
         map.flyTo({
           center: [z.lon, z.lat],
           zoom: 14.5,
-          pitch: 42,
-          duration: 700
+          pitch: 40,
+          duration: 650
         });
         if (window.ReactNativeWebView) {
           window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SELECT_ZONE', zoneId: z.id }));
@@ -490,7 +530,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
       el.addEventListener('pointerup', handleSelect);
       el.addEventListener('click', handleSelect);
 
-      var marker = new maplibregl.Marker({ element: el })
+      var marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([z.lon, z.lat])
         .addTo(map);
 
@@ -498,7 +538,6 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     }
 
     map.on('load', function() {
-      // 1. Add Radius Circle GeoJSON Source and Layers
       var circleGeoJSON = createGeoJSONCircle([centerLon, centerLat], radiusKm);
       map.addSource('radius-circle', {
         type: 'geojson',
@@ -511,7 +550,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         source: 'radius-circle',
         paint: {
           'fill-color': '#0284C7',
-          'fill-opacity': 0.10
+          'fill-opacity': 0.08
         }
       });
 
@@ -521,13 +560,12 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         source: 'radius-circle',
         paint: {
           'line-color': '#0284C7',
-          'line-width': 2.5,
+          'line-width': 2.2,
           'line-dasharray': [3, 2],
-          'line-opacity': 0.85
+          'line-opacity': 0.8
         }
       });
 
-      // 2. Center User / City Radar Marker
       var centerEl = document.createElement('div');
       centerEl.className = 'center-radar-container';
       centerEl.innerHTML = '<div class="center-radar-wave"></div><div class="center-radar-core"></div>';
@@ -535,19 +573,42 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         .setLngLat([centerLon, centerLat])
         .addTo(map);
 
-      // 3. Initial Hotspot Markers
       var initialZonesList = ${initialZones};
       initialZonesList.forEach(function(z) {
         addHotspotMarker(z);
       });
 
-      // Signal ready to React Native
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_LOADED' }));
       }
     });
 
-    // Reactive Global Window Functions
+    // Click anywhere on map to inspect real-time air quality, weather & traffic at that point
+    map.on('click', function(e) {
+      if (Date.now() - lastMarkerTapMs < 350) return;
+      if (window.ReactNativeWebView && e && e.lngLat) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'INSPECT_POINT',
+          lat: e.lngLat.lat,
+          lon: e.lngLat.lng
+        }));
+      }
+    });
+
+    // Notify RN when user pans significantly to another region so "Pindai Area Ini" button appears
+    map.on('moveend', function() {
+      var c = map.getCenter();
+      var dLat = Math.abs(c.lat - centerLat);
+      var dLon = Math.abs(c.lng - centerLon);
+      if ((dLat > 0.018 || dLon > 0.018) && window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'MAP_MOVED',
+          lat: c.lat,
+          lon: c.lng
+        }));
+      }
+    });
+
     window.updateRadius = function(newRadiusKm) {
       radiusKm = newRadiusKm;
       if (map && map.getSource('radius-circle')) {
@@ -558,7 +619,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     window.updateZones = function(newZones) {
       currentMarkers.forEach(function(m) { m.remove(); });
       currentMarkers = [];
-      newZones.forEach(function(z) {
+      (newZones || []).forEach(function(z) {
         addHotspotMarker(z);
       });
     };
@@ -575,10 +636,10 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
       }
       map.flyTo({
         center: [centerLon, centerLat],
-        zoom: 13.2,
-        pitch: is3D ? 38 : 0,
-        bearing: is3D ? -8 : 0,
-        duration: 900
+        zoom: 13.0,
+        pitch: is3D ? 36 : 0,
+        bearing: is3D ? -6 : 0,
+        duration: 850
       });
     };
 
@@ -587,7 +648,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
         map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
         is3D = false;
       } else {
-        map.easeTo({ pitch: 38, bearing: -8, duration: 500 });
+        map.easeTo({ pitch: 36, bearing: -6, duration: 500 });
         is3D = true;
       }
       return is3D;
@@ -596,21 +657,20 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     window.recenterMap = function() {
       map.flyTo({
         center: [centerLon, centerLat],
-        zoom: 13.2,
-        pitch: is3D ? 38 : 0,
-        bearing: is3D ? -8 : 0,
-        duration: 800
+        zoom: 13.0,
+        pitch: is3D ? 36 : 0,
+        bearing: is3D ? -6 : 0,
+        duration: 750
       });
     };
 
-    // ── flyToPoint: navigate map to any coordinate (from search / zone tap) ──
     window.flyToPoint = function(lon, lat, zoom) {
       map.flyTo({
         center: [lon, lat],
-        zoom: zoom || 15.5,
-        pitch: is3D ? 42 : 0,
-        bearing: is3D ? -8 : 0,
-        duration: 900,
+        zoom: zoom || 14.5,
+        pitch: is3D ? 40 : 0,
+        bearing: is3D ? -6 : 0,
+        duration: 850,
         essential: true
       });
     };
@@ -618,22 +678,33 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
 </body>
 </html>
     `;
-  }, []); // Static initial template, dynamic state updated via injectJavaScript
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleMessage = (event: any) => {
+  const handleMessage = async (event: any) => {
     try {
       const payload = JSON.parse(event.nativeEvent.data);
       if (payload.type === 'MAP_LOADED') {
         setIsMapLoaded(true);
       } else if (payload.type === 'SELECT_ZONE' && payload.zoneId && nearbyData) {
-        const found = nearbyData.nearby_zones.find(
-          (z) => z.zone.id === payload.zoneId
-        );
+        const found = nearbyData.nearby_zones.find((z) => z.zone.id === payload.zoneId);
         if (found) {
+          setSearchTarget(null);
           setSelectedZoneResult(found);
         }
+      } else if (payload.type === 'MAP_MOVED' && typeof payload.lat === 'number') {
+        setPannedCenter({ lat: payload.lat, lon: payload.lon });
+      } else if (payload.type === 'INSPECT_POINT' && typeof payload.lat === 'number') {
+        setIsInspectingPoint(true);
+        setSearchTarget(null);
+        try {
+          const pointReport = await mapScraperService.inspectCoordinates(payload.lat, payload.lon);
+          setSelectedZoneResult(pointReport);
+        } finally {
+          setIsInspectingPoint(false);
+        }
       }
-    } catch (e) {
+    } catch {
       // Ignore JSON parse errors
     }
   };
@@ -647,6 +718,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
   };
 
   const handleRecenter = () => {
+    setPannedCenter(null);
     webViewRef.current?.injectJavaScript(`
       if (window.recenterMap) { window.recenterMap(); }
       true;
@@ -666,13 +738,12 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     });
   };
 
+  const selectedColor = selectedZoneResult
+    ? getZoneMarkerColor(selectedZoneResult.impact_level, selectedZoneResult.report_type)
+    : '#1E6CEF';
+
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      transparent={false}
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <View style={styles.container}>
         <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
@@ -690,9 +761,8 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
           userAgent="AURA-Mobile-App/1.0"
         />
 
-        {/* 2. UNIFIED COMPACT FROSTED HUD (ROW 1 + ROW 2) */}
-        <View style={[styles.topUnifiedCard, { top: topPadding }]}>
-          {/* Row 1: Back Button, Search Bar, Refresh */}
+        {/* 2. TOP FROSTED HUD: Search, Cities, Category Filter & Radius */}
+        <View style={[styles.topHudContainer, { top: topPadding }]}>
           <View style={styles.topRow}>
             <Pressable
               onPress={() => {
@@ -711,41 +781,51 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               <Ionicons name="arrow-back" size={20} color="#0F172A" />
             </Pressable>
 
-            {/* Search Bar (replaces city scroller when focused) */}
             <View style={styles.searchBarWrapper}>
               <Ionicons name="search" size={15} color="#64748B" style={{ marginRight: 7 }} />
               <TextInput
                 ref={searchInputRef}
                 style={styles.searchBarInput}
-                placeholder="Cari jalan, kawasan di Semarang..."
+                placeholder="Cari jalan, kota, atau daerah di Indonesia..."
                 placeholderTextColor="#94A3B8"
                 value={searchQuery}
-                onChangeText={(t) => { setSearchQuery(t); setSearchTarget(null); }}
+                onChangeText={(t) => {
+                  setSearchQuery(t);
+                  setSearchTarget(null);
+                  if (t.trim().length < 2) {
+                    setSearchResults([]);
+                    setIsSearching(false);
+                  }
+                }}
                 onFocus={() => setIsSearchFocused(true)}
                 onBlur={() => {
-                  // small delay so result tap registers before blur hides list
                   setTimeout(() => setIsSearchFocused(false), 180);
                 }}
                 returnKeyType="search"
                 autoCorrect={false}
               />
-              {searchQuery.length > 0 && (
+              {isSearching ? (
+                <ActivityIndicator size="small" color="#1E6CEF" />
+              ) : searchQuery.length > 0 ? (
                 <Pressable
-                  onPress={() => { setSearchQuery(''); setSearchTarget(null); }}
+                  onPress={() => {
+                    setSearchQuery('');
+                    setSearchTarget(null);
+                  }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
                   <Ionicons name="close-circle" size={16} color="#94A3B8" />
                 </Pressable>
-              )}
+              ) : null}
             </View>
 
             <Pressable
-              onPress={loadNearbyHotspots}
+              onPress={loadRealtimeScrapedData}
               style={styles.circleIconButton}
-              accessibilityLabel="Refresh"
+              accessibilityLabel="Refresh Data Real-time"
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              {isLoading ? (
+              {isLoading || isInspectingPoint ? (
                 <ActivityIndicator size="small" color="#1E6CEF" />
               ) : (
                 <Ionicons name="refresh" size={18} color="#0F172A" />
@@ -753,10 +833,9 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
             </Pressable>
           </View>
 
-          {/* Row 2: City Pills (hidden when searching) or Radius & AQI */}
-          {!isSearchFocused && !searchTarget && (
+          {!isSearchFocused && (
             <>
-              {/* City Selector Pills */}
+              {/* City Presets */}
               <View style={styles.cityScrollWrapper}>
                 <ScrollView
                   horizontal
@@ -769,11 +848,11 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                     return (
                       <Pressable
                         key={city.name}
-                        onPress={() => setActiveCity(city)}
-                        style={[
-                          styles.cityChip,
-                          isActive && styles.cityChipActive,
-                        ]}
+                        onPress={() => {
+                          setSearchTarget(null);
+                          setActiveCity(city);
+                        }}
+                        style={[styles.cityChip, isActive && styles.cityChipActive]}
                       >
                         {isGPS && (
                           <Ionicons
@@ -783,12 +862,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                             style={{ marginRight: 4 }}
                           />
                         )}
-                        <Text
-                          style={[
-                            styles.cityChipText,
-                            isActive && styles.cityChipTextActive,
-                          ]}
-                        >
+                        <Text style={[styles.cityChipText, isActive && styles.cityChipTextActive]}>
                           {city.name}
                         </Text>
                       </Pressable>
@@ -797,57 +871,79 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                 </ScrollView>
               </View>
 
-              {/* Row 3: Radius Selector & Compact AQI Pill */}
+              {/* Category Icon Filter Strip */}
+              <View style={styles.categoryScrollWrapper}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.cityScrollContent}
+                >
+                  {CATEGORY_FILTERS.map((cat) => {
+                    const isActive = categoryFilter === cat.key;
+                    return (
+                      <Pressable
+                        key={cat.key}
+                        onPress={() => setCategoryFilter(cat.key)}
+                        style={[styles.catChip, isActive && styles.catChipActive]}
+                      >
+                        <Ionicons
+                          name={cat.icon}
+                          size={12}
+                          color={isActive ? '#FFFFFF' : '#475569'}
+                        />
+                        <Text style={[styles.catChipText, isActive && styles.catChipTextActive]}>
+                          {cat.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Radius Selector & Live Sensor Summary */}
               <View style={styles.subRow}>
-                {/* Radius Options */}
                 <View style={styles.radiusPillBox}>
                   <Text style={styles.radiusLabel}>Radius:</Text>
                   {[5, 10, 20].map((r) => {
                     const isSelected = radiusKm === r;
                     return (
-                  <Pressable
-                    key={r}
-                    onPress={() => setRadiusKm(r)}
-                    style={[
-                      styles.radiusChip,
-                      isSelected && styles.radiusChipSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.radiusChipText,
-                        isSelected && styles.radiusChipTextSelected,
-                      ]}
-                    >
-                      {r} km
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+                      <Pressable
+                        key={r}
+                        onPress={() => setRadiusKm(r)}
+                        style={[styles.radiusChip, isSelected && styles.radiusChipSelected]}
+                      >
+                        <Text
+                          style={[
+                            styles.radiusChipText,
+                            isSelected && styles.radiusChipTextSelected,
+                          ]}
+                        >
+                          {r} km
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
 
-            {/* Compact AQI / Sensor Summary */}
-            {nearbyData?.local_environment?.air_quality ? (
-              <View style={styles.aqiSummaryBadge}>
-                <Ionicons name="leaf" size={13} color="#10B981" style={{ marginRight: 4 }} />
-                <Text style={styles.aqiSummaryText}>
-                  AQI {nearbyData.local_environment.air_quality.us_aqi}
-                </Text>
-                <Text style={styles.aqiCountSubText}>
-                  • {nearbyData.zones_found_count} Hotspot
-                </Text>
+                {nearbyData?.local_environment?.air_quality ? (
+                  <View style={styles.aqiSummaryBadge}>
+                    <View style={styles.radarLiveDot} />
+                    <Text style={styles.aqiSummaryText}>
+                      AQI {nearbyData.local_environment.air_quality.us_aqi}
+                    </Text>
+                    <Text style={styles.aqiCountSubText}>• {displayedZones.length} Titik</Text>
+                  </View>
+                ) : (
+                  <View style={styles.aqiSummaryBadge}>
+                    <View style={styles.radarLiveDot} />
+                    <Text style={styles.aqiSummaryText}>Live Scraper</Text>
+                  </View>
+                )}
               </View>
-            ) : (
-              <View style={styles.aqiSummaryBadge}>
-                <View style={styles.radarLiveDot} />
-                <Text style={styles.aqiSummaryText}>Radar 3D Aktif</Text>
-              </View>
-            )}
-          </View>
             </>
           )}
 
-          {/* Search Results Dropdown — only when typing */}
+          {/* Search Results Dropdown */}
           {isSearchFocused && searchQuery.length >= 2 && searchResults.length > 0 && (
             <View style={styles.searchDropdown}>
               {searchResults.map((road, idx) => (
@@ -860,14 +956,18 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                   onPress={() => handleSelectRoad(road)}
                 >
                   <Ionicons
-                    name={road.h === 'motorway' || road.h === 'motorway_link' ? 'car-sport' : 'navigate-circle-outline'}
+                    name={road.isGlobal ? 'earth' : 'navigate-circle-outline'}
                     size={16}
                     color="#1E6CEF"
                     style={{ marginRight: 8 }}
                   />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.searchResultName} numberOfLines={1}>{road.n}</Text>
-                    <Text style={styles.searchResultType}>{highwayLabel(road.h)}</Text>
+                    <Text style={styles.searchResultName} numberOfLines={1}>
+                      {road.n}
+                    </Text>
+                    <Text style={styles.searchResultType} numberOfLines={1}>
+                      {road.subtitle || highwayLabel(road.h)}
+                    </Text>
                   </View>
                   <Ionicons name="chevron-forward" size={14} color="#CBD5E1" />
                 </Pressable>
@@ -876,15 +976,24 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
           )}
         </View>
 
-        {/* 3. NATIVE FLOATING 3D & RECENTER CONTROLS (DYNAMIC POSITION) */}
+        {/* Panned Region Rescrape Pill */}
+        {pannedCenter && !isSearchFocused && (
+          <View style={[styles.scanAreaBannerWrapper, { top: topPadding + 162 }]}>
+            <Pressable onPress={handleScanMovedArea} style={styles.scanAreaButton}>
+              <Ionicons name="scan" size={14} color="#FFFFFF" />
+              <Text style={styles.scanAreaText}>Pindai Area Ini (Real-Time)</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* 3. FLOATING 3D & RECENTER CONTROLS */}
         <View
           style={[
             styles.floatingNativeControls,
-            { bottom: selectedZoneResult ? 280 : insets.bottom + 28 },
+            { bottom: selectedZoneResult || searchTarget ? 318 : insets.bottom + 28 },
           ]}
           pointerEvents="box-none"
         >
-          {/* 3D / 2D Perspective Toggle */}
           <Pressable
             style={styles.nativeMapBtn}
             onPress={handleToggle3D}
@@ -893,7 +1002,6 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
             <Text style={styles.nativeMapBtnText}>{is3DMode ? '3D' : '2D'}</Text>
           </Pressable>
 
-          {/* Recenter Button */}
           <Pressable
             style={styles.nativeMapBtn}
             onPress={handleRecenter}
@@ -903,21 +1011,25 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
           </Pressable>
         </View>
 
-        {/* 4. FLOATING LEGEND & DIRECT NAVIGATION TRIGGER (WHEN DETAIL CARD IS CLOSED) */}
+        {/* 4. FLOATING LEGEND & DIRECT NAVIGATION TRIGGER */}
         {!selectedZoneResult && !searchTarget && (
           <>
             <View style={[styles.legendCard, { bottom: insets.bottom + 84 }]}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
-                <Text style={styles.legendLabel}>Bahaya</Text>
+                <Text style={styles.legendLabel}>Bahaya / Padat</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
-                <Text style={styles.legendLabel}>Waspada</Text>
+                <Text style={styles.legendLabel}>Waspada / Sedang</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-                <Text style={styles.legendLabel}>Aman</Text>
+                <Text style={styles.legendLabel}>Aman / Lancar</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#0284C7' }]} />
+                <Text style={styles.legendLabel}>Cuaca & Udara</Text>
               </View>
             </View>
 
@@ -933,35 +1045,41 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
           </>
         )}
 
-        {/* 5. INTERACTIVE HOTSPOT DETAIL BOTTOM CARD */}
+        {/* 5. REAL-TIME SCRAPED REPORT DETAIL SHEET */}
         {selectedZoneResult && (
-          <View style={[styles.detailCard, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={[styles.detailCard, { paddingBottom: insets.bottom + 14 }]}>
             <View style={styles.detailCardHeader}>
-              <View style={{ flex: 1, paddingRight: 8 }}>
+              <View style={[styles.categoryIconCircle, { backgroundColor: selectedColor }]}>
+                <Ionicons
+                  name={getReportIoniconName(selectedZoneResult.report_type)}
+                  size={18}
+                  color="#FFFFFF"
+                />
+              </View>
+
+              <View style={{ flex: 1, paddingHorizontal: 10 }}>
                 <Text numberOfLines={1} style={styles.detailLocationName}>
                   {selectedZoneResult.zone.name}
                 </Text>
-                <Text style={styles.detailDistanceText}>
-                  Jarak: {selectedZoneResult.distance_km.toFixed(1)} km dari titik pusat
+                <Text numberOfLines={1} style={styles.detailDistanceText}>
+                  {getReportCategoryLabel(selectedZoneResult.report_type)} •{' '}
+                  {selectedZoneResult.distance_km > 0
+                    ? `${selectedZoneResult.distance_km.toFixed(1)} km`
+                    : 'Titik Terpilih'}
+                  {selectedZoneResult.source_tag ? ` • ${selectedZoneResult.source_tag}` : ''}
                 </Text>
               </View>
 
-              {/* Impact Level Badge */}
               <View
                 style={[
                   styles.impactBadge,
                   {
                     backgroundColor: getBadgeBg(selectedZoneResult.impact_level),
-                    borderColor: getMarkerColor(selectedZoneResult.impact_level),
+                    borderColor: selectedColor,
                   },
                 ]}
               >
-                <Text
-                  style={[
-                    styles.impactBadgeText,
-                    { color: getMarkerColor(selectedZoneResult.impact_level) },
-                  ]}
-                >
+                <Text style={[styles.impactBadgeText, { color: selectedColor }]}>
                   {selectedZoneResult.impact_level}
                 </Text>
               </View>
@@ -975,51 +1093,89 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               </Pressable>
             </View>
 
-            {/* Metrics: Kemacetan & Skor Dampak */}
-            <View style={styles.detailMetricsRow}>
-              <View style={styles.detailMetricBox}>
-                <Ionicons name="car-outline" size={18} color="#0284C7" />
-                <View style={{ marginLeft: 6 }}>
-                  <Text style={styles.detailMetricLabel}>Kemacetan</Text>
-                  <Text style={styles.detailMetricValue}>
-                    {selectedZoneResult.congestion_status}
-                  </Text>
+            {/* Primary Live Report Metrics: Kemacetan, Polusi AQI, Cuaca, Skor */}
+            <View style={styles.reportGrid}>
+              <View style={styles.reportMetricTile}>
+                <View style={styles.reportTileHead}>
+                  <Ionicons name="car-outline" size={14} color="#1E6CEF" />
+                  <Text style={styles.reportTileLabel}>Kemacetan</Text>
                 </View>
+                <Text numberOfLines={1} style={styles.reportTileValue}>
+                  {selectedZoneResult.congestion_status}
+                </Text>
               </View>
 
-              <View style={styles.detailMetricDivider} />
-
-              <View style={styles.detailMetricBox}>
-                <Ionicons name="warning-outline" size={18} color="#F59E0B" />
-                <View style={{ marginLeft: 6 }}>
-                  <Text style={styles.detailMetricLabel}>Skor Dampak</Text>
-                  <Text style={styles.detailMetricValue}>
-                    {selectedZoneResult.impact_score.toFixed(1)}/100
-                  </Text>
+              <View style={styles.reportMetricTile}>
+                <View style={styles.reportTileHead}>
+                  <Ionicons name="cloud-outline" size={14} color="#F59E0B" />
+                  <Text style={styles.reportTileLabel}>Polusi AQI</Text>
                 </View>
+                <Text numberOfLines={1} style={styles.reportTileValue}>
+                  {selectedZoneResult.air_quality?.us_aqi ?? '-'} US AQI
+                </Text>
+              </View>
+
+              <View style={styles.reportMetricTile}>
+                <View style={styles.reportTileHead}>
+                  <Ionicons name="partly-sunny-outline" size={14} color="#0284C7" />
+                  <Text style={styles.reportTileLabel}>Cuaca</Text>
+                </View>
+                <Text numberOfLines={1} style={styles.reportTileValue}>
+                  {selectedZoneResult.weather
+                    ? `${selectedZoneResult.weather.temperature_c}°C • ${selectedZoneResult.weather.condition}`
+                    : `${selectedZoneResult.impact_score.toFixed(0)}/100`}
+                </Text>
               </View>
             </View>
 
-            {/* Peak Hours & Pollution Sources */}
-            {selectedZoneResult.zone.peak_hours && (
-              <View style={styles.infoRowSmall}>
-                <Text style={styles.infoLabelSmall}>Jam Sibuk:</Text>
-                <Text style={styles.infoValueSmall}>
-                  {selectedZoneResult.zone.peak_hours.join(', ')}
-                </Text>
+            {/* Pollutant Details Chip Strip */}
+            {selectedZoneResult.air_quality && (
+              <View style={styles.pollutantStrip}>
+                <View style={styles.pollutantChip}>
+                  <Text style={styles.pollutantChipText}>
+                    PM2.5: {selectedZoneResult.air_quality.pm2_5} µg/m³
+                  </Text>
+                </View>
+                <View style={styles.pollutantChip}>
+                  <Text style={styles.pollutantChipText}>
+                    PM10: {selectedZoneResult.air_quality.pm10} µg/m³
+                  </Text>
+                </View>
+                <View style={styles.pollutantChip}>
+                  <Text style={styles.pollutantChipText}>
+                    CO: {selectedZoneResult.air_quality.carbon_monoxide}
+                  </Text>
+                </View>
+                {selectedZoneResult.weather && (
+                  <View style={styles.pollutantChip}>
+                    <Text style={styles.pollutantChipText}>
+                      Angin: {selectedZoneResult.weather.wind_speed_kmh} km/j
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
 
-            {selectedZoneResult.zone.pollution_sources && (
+            {/* Additional Info & Recommendations */}
+            {selectedZoneResult.zone.pollution_sources?.length > 0 && (
               <View style={styles.infoRowSmall}>
-                <Text style={styles.infoLabelSmall}>Sumber Polusi:</Text>
+                <Text style={styles.infoLabelSmall}>Sumber:</Text>
                 <Text numberOfLines={1} style={styles.infoValueSmall}>
                   {selectedZoneResult.zone.pollution_sources.join(' • ')}
                 </Text>
               </View>
             )}
 
-            {/* Action Buttons: Navigasi + Prediksi 7 Hari */}
+            {selectedZoneResult.recommendations && selectedZoneResult.recommendations.length > 0 && (
+              <View style={styles.infoRowSmall}>
+                <Text style={styles.infoLabelSmall}>Saran:</Text>
+                <Text numberOfLines={1} style={styles.infoValueSmall}>
+                  {selectedZoneResult.recommendations[0]}
+                </Text>
+              </View>
+            )}
+
+            {/* Action Buttons: Navigasi + Analisis Penyakit */}
             <View style={styles.actionButtonsRow}>
               <Pressable
                 onPress={() => handleNavigateToZone(selectedZoneResult)}
@@ -1033,16 +1189,14 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                 onPress={() => handleOpenAnalysis(selectedZoneResult)}
                 style={styles.actionAnalysisButton}
               >
-                <Text style={styles.actionAnalysisText}>
-                  Prediksi 7 Hari
-                </Text>
+                <Text style={styles.actionAnalysisText}>Analisis Penyakit &amp; Polusi</Text>
                 <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
               </Pressable>
             </View>
           </View>
         )}
 
-        {/* 6. SEARCH TARGET CARD — shown after selecting a road from search */}
+        {/* 6. SEARCH TARGET CARD */}
         {searchTarget && !selectedZoneResult && (
           <View style={[styles.detailCard, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.detailCardHeader}>
@@ -1051,16 +1205,22 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
                   {searchTarget.n}
                 </Text>
                 <Text style={styles.detailDistanceText}>
-                  {highwayLabel(searchTarget.h)} • {searchTarget.lat.toFixed(5)}, {searchTarget.lon.toFixed(5)}
+                  {searchTarget.subtitle || highwayLabel(searchTarget.h)} •{' '}
+                  {searchTarget.lat.toFixed(4)}, {searchTarget.lon.toFixed(4)}
                 </Text>
               </View>
-              <View style={[styles.impactBadge, { backgroundColor: '#EFF6FF', borderColor: '#1E6CEF' }]}>
+              <View
+                style={[styles.impactBadge, { backgroundColor: '#EFF6FF', borderColor: '#1E6CEF' }]}
+              >
                 <Text style={[styles.impactBadgeText, { color: '#1E6CEF' }]}>
                   {highwayLabel(searchTarget.h)}
                 </Text>
               </View>
               <Pressable
-                onPress={() => { setSearchTarget(null); setSearchQuery(''); }}
+                onPress={() => {
+                  setSearchTarget(null);
+                  setSearchQuery('');
+                }}
                 style={styles.detailCloseButton}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
@@ -1068,11 +1228,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
               </Pressable>
             </View>
 
-            {/* Navigate button */}
-            <Pressable
-              onPress={handleNavigateToTarget}
-              style={styles.actionNavButtonFull}
-            >
+            <Pressable onPress={handleNavigateToTarget} style={styles.actionNavButtonFull}>
               <Ionicons name="navigate" size={18} color="#FFFFFF" />
               <Text style={styles.actionNavFullText}>Mulai Navigasi ke Sini</Text>
             </Pressable>
@@ -1096,22 +1252,21 @@ const styles = StyleSheet.create({
   },
 
   /* UNIFIED COMPACT FROSTED HUD */
-  topUnifiedCard: {
+  topHudContainer: {
     position: 'absolute',
     left: 12,
     right: 12,
     zIndex: 30,
     backgroundColor: 'rgba(255, 255, 255, 0.94)',
     borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    padding: 10,
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
     shadowRadius: 10,
-    elevation: 6,
+    elevation: 5,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.9)',
+    borderColor: 'rgba(255, 255, 255, 0.85)',
     gap: 8,
   },
   topRow: {
@@ -1123,42 +1278,63 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
   },
   cityScrollWrapper: {
-    flex: 1,
-    overflow: 'hidden',
+    height: 30,
+  },
+  categoryScrollWrapper: {
+    height: 28,
   },
   cityScrollContent: {
     gap: 6,
-    paddingVertical: 2,
     alignItems: 'center',
   },
   cityChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 14,
     backgroundColor: '#F1F5F9',
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 16,
   },
   cityChipActive: {
     backgroundColor: '#1E6CEF',
   },
   cityChipText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#475569',
   },
   cityChipTextActive: {
     color: '#FFFFFF',
   },
+  catChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
+  catChipActive: {
+    backgroundColor: '#0284C7',
+    borderColor: '#0284C7',
+  },
+  catChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  catChipTextActive: {
+    color: '#FFFFFF',
+  },
 
-  /* SUB-ROW: RADIUS & AQI SUMMARY */
   subRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1222,6 +1398,31 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: '#10B981',
     marginRight: 5,
+  },
+
+  scanAreaBannerWrapper: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 25,
+  },
+  scanAreaButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  scanAreaText: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '700',
   },
 
   /* NATIVE FLOATING MAP CONTROLS */
@@ -1319,7 +1520,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 18,
+    padding: 16,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.15,
@@ -1330,78 +1531,107 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 10,
+  },
+  categoryIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   detailLocationName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0F172A',
   },
   detailDistanceText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748B',
     marginTop: 2,
   },
   impactBadge: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 4,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1.5,
-    marginRight: 8,
+    marginRight: 6,
   },
   impactBadgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   detailCloseButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  detailMetricsRow: {
+
+  reportGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    padding: 10,
-    marginBottom: 10,
+    gap: 8,
+    marginBottom: 8,
   },
-  detailMetricBox: {
+  reportMetricTile: {
     flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  reportTileHead: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
   },
-  detailMetricLabel: {
-    fontSize: 11,
+  reportTileLabel: {
+    fontSize: 10.5,
+    fontWeight: '600',
     color: '#64748B',
   },
-  detailMetricValue: {
-    fontSize: 13,
+  reportTileValue: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+
+  pollutantStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  pollutantChip: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  pollutantChipText: {
+    fontSize: 10.5,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#1D4ED8',
   },
-  detailMetricDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: '#E2E8F0',
-    marginHorizontal: 10,
-  },
+
   infoRowSmall: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 4,
   },
   infoLabelSmall: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11.5,
+    fontWeight: '700',
     color: '#64748B',
-    width: 95,
+    width: 56,
   },
   infoValueSmall: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '500',
     color: '#1E293B',
     flex: 1,
@@ -1410,8 +1640,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0284C7',
     borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1419,7 +1649,7 @@ const styles = StyleSheet.create({
   },
   actionAnalysisText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
   },
 
@@ -1482,21 +1712,21 @@ const styles = StyleSheet.create({
   actionButtonsRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 14,
+    marginTop: 10,
   },
   actionNavButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 12,
+    paddingVertical: 11,
     paddingHorizontal: 14,
     borderRadius: 14,
     backgroundColor: '#10B981',
   },
   actionNavText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
   },
 
