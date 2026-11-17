@@ -4,6 +4,7 @@ export interface DoctorItem {
   specialization: string;
   hospital: string;
   hospitalId: string;
+  rating: number;
   ratingPercentage: number;
   experienceYears: number;
   practiceHours: string;
@@ -34,10 +35,11 @@ export interface HospitalItem {
 export const DOCTORS_DATA: DoctorItem[] = [
   {
     id: 'dr-apung',
-    name: 'dr. Apung Setiawati',
+    name: 'Dr. Apung Setiawati',
     specialization: 'Kedokteran Umum',
-    hospital: 'RSUP Dr. Kariadi',
+    hospital: 'RSUP. Dr Kariadi',
     hospitalId: 'rsup-kariadi',
+    rating: 4.5,
     ratingPercentage: 100,
     experienceYears: 10,
     practiceHours: '08.00–15.00',
@@ -47,10 +49,11 @@ export const DOCTORS_DATA: DoctorItem[] = [
   },
   {
     id: 'dr-ibanez',
-    name: 'dr. Yahama Tisak',
+    name: 'Dr. Yahama Tisak',
     specialization: 'Kedokteran Umum',
-    hospital: 'RSUP Dr. Kariadi',
+    hospital: 'RSUP. Dr Kariadi',
     hospitalId: 'rsup-kariadi',
+    rating: 4.8,
     ratingPercentage: 100,
     experienceYears: 8,
     practiceHours: '09.00–16.00',
@@ -60,10 +63,11 @@ export const DOCTORS_DATA: DoctorItem[] = [
   },
   {
     id: 'dr-daffa',
-    name: 'dr. Agung Sp. P',
+    name: 'Dr. Agung Sp. P',
     specialization: 'Spesialis Paru',
-    hospital: 'RSUP Dr. Kariadi',
+    hospital: 'RSUP. Dr Kariadi',
     hospitalId: 'rsup-kariadi',
+    rating: 4.9,
     ratingPercentage: 100,
     experienceYears: 12,
     practiceHours: '10.00–17.00',
@@ -73,10 +77,11 @@ export const DOCTORS_DATA: DoctorItem[] = [
   },
   {
     id: 'dr-erland',
-    name: 'dr. Agung Sp.KO',
+    name: 'Dr. Agung Sp.KO',
     specialization: 'Kedokteran Olahraga',
-    hospital: 'RSUP Dr. Kariadi',
+    hospital: 'RSUP. Dr Kariadi',
     hospitalId: 'rsup-kariadi',
+    rating: 4.7,
     ratingPercentage: 100,
     experienceYears: 7,
     practiceHours: '08.30–14.30',

@@ -8,33 +8,82 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dimensions,
-  Linking,
   Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StatusBar,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-// Banner image natural aspect ratio (402 x 268 = 1.5)
-const BANNER_HEIGHT = Math.round(SCREEN_WIDTH * (268 / 402));
-const CARD_WIDTH = Math.min(312, SCREEN_WIDTH - 60);
+
+const HERO_CARD_HEIGHT = 152;
+const DOCTOR_CARD_WIDTH = Math.min(264, Math.round(SCREEN_WIDTH * 0.71));
+
+const CLOUD_3D_ASSET = require('@/assets/dr/awan.png');
+const AMBULANCE_3D_ASSET = require('@/assets/dr/ambulance.png');
 
 export default function CekSekarangScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [searchQuery, setSearchQuery] = useState('');
   const [hospitals, setHospitals] = useState<HospitalItem[]>(HOSPITALS_DATA);
   const [refreshing, setRefreshing] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Load nearby hospitals from backend/Firestore with GPS location
-  const loadNearbyHospitals = useCallback(async () => {
+  // Subtle UI-thread floating animations for the 3D hero assets
+  const cloudFloat = useSharedValue(0);
+  const ambulanceBob = useSharedValue(0);
+
+  useEffect(() => {
+    cloudFloat.value = withRepeat(
+      withSequence(
+        withTiming(-5, { duration: 1800, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: 1800, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1,
+      true
+    );
+
+    ambulanceBob.value = withRepeat(
+      withSequence(
+        withTiming(-3, { duration: 1400, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: 1400, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1,
+      true
+    );
+
+    return () => {
+      cancelAnimation(cloudFloat);
+      cancelAnimation(ambulanceBob);
+    };
+  }, [cloudFloat, ambulanceBob]);
+
+  const cloudAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: cloudFloat.value }],
+  }));
+
+  const ambulanceAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: ambulanceBob.value }, { translateX: ambulanceBob.value * 0.6 }],
+  }));
+
+  const fetchNearbyHospitals = useCallback(async () => {
     let lat = -6.9934;
     let lon = 110.4087;
 
@@ -47,78 +96,91 @@ export default function CekSekarangScreen() {
 
       const res = await hospitalService.getNearbyHospitals(lat, lon, 25, 12);
       if (res && res.length > 0) {
-        const mapped: HospitalItem[] = res.map((h) => ({
-          id: h.id,
-          name: h.name,
-          distance: h.distance_km ? `${h.distance_km.toFixed(1).replace('.', ',')} km` : '1,5 km',
-          distanceKm: h.distance_km || 1.5,
-          rating: h.rating,
-          address: h.address,
-          openHours: h.open_hours || 'Buka 24 Jam',
-          description: `Rumah sakit rujukan terakreditasi dengan fasilitas ${h.facilities.join(', ')}.`,
-          coordinates: {
-            lat: h.latitude,
-            lon: h.longitude,
-          },
-          image: h.image_url ? { uri: h.image_url } : require('@/assets/dr/hospital_kariadi.jpg'),
-          facilities: h.facilities.map((f) => ({ icon: 'medical-outline', label: f })),
-        }));
-        setHospitals(mapped);
+        return res.map((h, index): HospitalItem => {
+          const baseDist = h.distance_km
+            ? `${h.distance_km.toFixed(1).replace('.', ',')} km`
+            : '1,5 km';
+          return {
+            id: h.id,
+            name: h.name,
+            distance: index === 0 ? `${baseDist} – Terdekat` : baseDist,
+            distanceKm: h.distance_km || 1.5,
+            rating: h.rating,
+            address: h.address,
+            openHours: h.open_hours || 'Buka 24 Jam',
+            description: `Rumah sakit rujukan terakreditasi dengan fasilitas ${h.facilities.join(', ')}.`,
+            coordinates: {
+              lat: h.latitude,
+              lon: h.longitude,
+            },
+            image: h.image_url ? { uri: h.image_url } : require('@/assets/dr/hospital_kariadi.jpg'),
+            facilities: h.facilities.map((f) => ({ icon: 'medical-outline', label: f })),
+          };
+        });
       }
     } catch (err) {
       console.warn('[CekSekarang] Error loading hospitals:', err);
-    } finally {
-      setRefreshing(false);
     }
+    return null;
   }, []);
 
   useEffect(() => {
-    loadNearbyHospitals();
-  }, [loadNearbyHospitals]);
+    let active = true;
+    fetchNearbyHospitals().then((mapped) => {
+      if (active && mapped) {
+        setHospitals(mapped);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [fetchNearbyHospitals]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadNearbyHospitals();
-  }, [loadNearbyHospitals]);
+    fetchNearbyHospitals()
+      .then((mapped) => {
+        if (mapped) {
+          setHospitals(mapped);
+        }
+      })
+      .finally(() => {
+        setRefreshing(false);
+      });
+  }, [fetchNearbyHospitals]);
 
-  // Filtered doctors by search query
   const filteredDoctors = useMemo(() => {
-    if (!searchQuery.trim()) return DOCTORS_DATA;
-    return DOCTORS_DATA.filter((doctor) => {
-      return (
-        doctor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        doctor.specialization.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        doctor.hospital.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    });
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return DOCTORS_DATA;
+    return DOCTORS_DATA.filter(
+      (d) =>
+        d.name.toLowerCase().includes(q) ||
+        d.specialization.toLowerCase().includes(q) ||
+        d.hospital.toLowerCase().includes(q)
+    );
   }, [searchQuery]);
 
-  // Filtered hospitals by search query
   const filteredHospitals = useMemo(() => {
-    if (!searchQuery.trim()) return hospitals;
-    return hospitals.filter((h) =>
-      h.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      h.address.toLowerCase().includes(searchQuery.toLowerCase())
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return hospitals;
+    return hospitals.filter(
+      (h) => h.name.toLowerCase().includes(q) || h.address.toLowerCase().includes(q)
     );
   }, [searchQuery, hospitals]);
 
   const topInset = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : insets.top;
-
-  // Emergency Call Handler
-  const handleCallEmergency = () => {
-    Linking.openURL('tel:119').catch(() => {
-      alert('Panggilan darurat 119 tidak didukung di perangkat ini.');
-    });
-  };
+  const headerBarHeight = 46;
+  const heroMarginTop = topInset + headerBarHeight + 14;
+  const blueBackdropHeight = heroMarginTop + Math.round(HERO_CARD_HEIGHT * 0.48);
 
   return (
-    <View className="flex-1 bg-[#1E6CEF]">
+    <View style={styles.root}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        className="flex-grow"
-        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+        style={styles.scrollView}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 36 }]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -128,107 +190,155 @@ export default function CekSekarangScreen() {
           />
         }
       >
-        {/* ============================================================ */}
-        {/* 1. HERO BANNER: FULL-WIDTH WELCOMING WITH VIBRANT FADE      */}
-        {/* ============================================================ */}
-        <View
-          className="w-full relative bg-white overflow-hidden"
-          style={{ width: SCREEN_WIDTH, height: BANNER_HEIGHT }}
-        >
-          <Image
-            source={require('@/assets/dr/Welcoming.png')}
-            className="w-full h-full"
-            style={{ width: '100%', height: '100%' }}
-            contentFit="cover"
-            priority="high"
-          />
-
-          {/* Top Status Gradient for contrast on back button */}
+        {/* ── 1. HEADER BIRU + FLOATING HERO CARD DENGAN ASET 3D AWAN & AMBULANS ── */}
+        <View style={styles.headerSection}>
+          {/* Latar biru gradien di bagian atas yang membentang hingga tengah kartu */}
           <LinearGradient
-            colors={['rgba(0, 0, 0, 0.45)', 'rgba(0, 0, 0, 0.1)', 'transparent']}
-            className="absolute top-0 left-0 right-0"
-            style={{ height: topInset + 54 }}
-            pointerEvents="none"
-          />
-
-          {/* Bottom Seamless Gradient Fade into Aura Royal Blue */}
-          <LinearGradient
-            colors={['transparent', 'rgba(30, 108, 239, 0.4)', 'rgba(30, 108, 239, 0.85)', '#1E6CEF']}
-            className="absolute bottom-0 left-0 right-0 h-[60px]"
-            pointerEvents="none"
-          />
-
-          {/* Floating Back Button (Top-Left) */}
-          <Pressable
-            onPress={() => router.back()}
-            className="absolute left-4 z-50 w-[38px] h-[38px] rounded-full bg-white/90 items-center justify-center shadow-md active:opacity-80"
-            style={{ top: topInset + 8 }}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            accessibilityRole="button"
-            accessibilityLabel="Kembali"
+            colors={['#1259DB', '#1B6EF3', '#2980FA']}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={[styles.blueHeaderBackdrop, { height: blueBackdropHeight + 300 }]}
           >
-            <Ionicons name="arrow-back" size={20} color="#1E293B" />
-          </Pressable>
+            {/* Aksen atmosfer halus di latar header */}
+            <View style={styles.backdropGlowTop} pointerEvents="none" />
+          </LinearGradient>
 
-          {/* Floating Emergency 119 Pill (Top-Right) */}
-          <Pressable
-            onPress={handleCallEmergency}
-            className="absolute right-4 z-50 flex-row items-center bg-[#EF4444] px-3 py-1.5 rounded-full shadow-md active:opacity-90"
-            style={{ top: topInset + 8 }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <View className="w-2 h-2 rounded-full bg-white mr-1.5" />
-            <Ionicons name="call" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-            <Text className="text-white text-xs font-bold tracking-wider">IGD 119</Text>
-          </Pressable>
-        </View>
-
-        {/* ============================================================ */}
-        {/* 2. COMPACT SEARCH BAR                                       */}
-        {/* ============================================================ */}
-        <View className="mx-4 -mt-5 z-30 mb-3.5">
-          <View className="flex-row items-center bg-white rounded-[14px] px-3.5 h-[46px] shadow-lg shadow-black/15">
-            <Ionicons name="search" size={17} color="#94A3B8" style={{ marginRight: 8 }} />
-            <TextInput
-              className="flex-1 text-[13px] text-slate-800 font-medium py-0"
-              placeholder="Cari dokter spesialis atau rumah sakit..."
-              placeholderTextColor="#94A3B8"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-            />
-            {searchQuery.length > 0 && (
+          {/* Top Action Bar */}
+          <View style={[styles.topNavBar, { top: topInset + 6 }]}>
+            <View style={styles.topNavLeft}>
               <Pressable
-                onPress={() => setSearchQuery('')}
+                onPress={() => router.back()}
+                style={styles.navIconBtn}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Kembali"
               >
-                <Ionicons name="close-circle" size={16} color="#94A3B8" />
+                <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
               </Pressable>
-            )}
+              <Text style={styles.topNavTitle}>Layanan Medis</Text>
+            </View>
+
+            <View style={styles.topNavRight}>
+              <Pressable
+                onPress={() => {
+                  setShowSearch((prev) => {
+                    if (prev) setSearchQuery('');
+                    return !prev;
+                  });
+                }}
+                style={[styles.navIconBtn, showSearch && styles.navIconBtnActive]}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Cari dokter atau rumah sakit"
+              >
+                <Ionicons name={showSearch ? 'close' : 'search'} size={18} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Kartu Hero Mengambang */}
+          <View style={[styles.heroCardOuter, { marginTop: heroMarginTop }]}>
+            <View style={styles.heroCardInner}>
+              <LinearGradient
+                colors={['#4B94F7', '#5CA7FC', '#72BCFF']}
+                start={{ x: 0, y: 0.15 }}
+                end={{ x: 1, y: 0.9 }}
+                style={StyleSheet.absoluteFill}
+              />
+
+              {/* Lapisan aksen lengkung biru di sisi kanan */}
+              <View style={styles.heroAccentCircleLarge} pointerEvents="none" />
+              <View style={styles.heroAccentCircleSmall} pointerEvents="none" />
+
+              {/* Sheen halus di tepi atas kartu */}
+              <LinearGradient
+                colors={['rgba(255,255,255,0.16)', 'transparent']}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                style={styles.heroTopSheen}
+                pointerEvents="none"
+              />
+
+              <View style={styles.heroTextWrapper}>
+                <Text style={styles.heroTitle}>
+                  {'Temukan Dokter &\nRumah Sakit Terdekat\nSekarang'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Aset 3D Awan di sudut kanan atas kartu */}
+            <Animated.View
+              style={[styles.heroCloudWrapper, cloudAnimStyle]}
+              pointerEvents="none"
+            >
+              <Image
+                source={CLOUD_3D_ASSET}
+                style={styles.heroCloudAsset}
+                contentFit="contain"
+                priority="high"
+              />
+            </Animated.View>
+
+            {/* Aset 3D Ambulans di sudut kanan bawah kartu */}
+            <Animated.View
+              style={[styles.heroAmbulanceWrapper, ambulanceAnimStyle]}
+              pointerEvents="none"
+            >
+              <Image
+                source={AMBULANCE_3D_ASSET}
+                style={styles.heroAmbulanceAsset}
+                contentFit="contain"
+                priority="high"
+              />
+            </Animated.View>
           </View>
         </View>
 
-        {/* ============================================================ */}
-        {/* 3. DOKTER MITRA AURA SECTION                                */}
-        {/* ============================================================ */}
-        <View className="flex-row items-center justify-between px-4 mb-3">
-          <Text className="text-lg font-bold text-white tracking-wide">Dokter Mitra Aura</Text>
+        {/* Inline Expandable Search Bar */}
+        {showSearch && (
+          <View style={styles.searchContainer}>
+            <View style={styles.searchBox}>
+              <Ionicons name="search" size={17} color="#2575EE" style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Cari nama dokter, spesialis, atau rumah sakit..."
+                placeholderTextColor="#94A3B8"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoFocus
+                returnKeyType="search"
+              />
+              {searchQuery.length > 0 && (
+                <Pressable
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={17} color="#94A3B8" />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* ── 2. SECTION DOKTER MITRA AURA ── */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Dokter Mitra Aura</Text>
+          <View style={styles.sectionCountBadge}>
+            <Text style={styles.sectionCountText}>{filteredDoctors.length} Dokter</Text>
+          </View>
         </View>
 
         {filteredDoctors.length > 0 ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 10, gap: 14 }}
-            snapToInterval={CARD_WIDTH + 14}
+            contentContainerStyle={styles.doctorScrollContent}
+            snapToInterval={DOCTOR_CARD_WIDTH + 14}
             decelerationRate="fast"
           >
             {filteredDoctors.map((doctor: DoctorItem) => (
               <Pressable
                 key={doctor.id}
-                className="h-[168px] flex-row bg-white rounded-2xl p-3 shadow-xl shadow-black/20 relative overflow-hidden"
-                style={{ width: CARD_WIDTH }}
                 onPress={() =>
                   router.push({
                     pathname: '/doctor-reservation',
@@ -236,110 +346,86 @@ export default function CekSekarangScreen() {
                   })
                 }
               >
-                {/* Left Side: Soft Blue Arc & Doctor Photo */}
-                <View
-                  className="w-[500px] h-full relative items-center justify-end top-5"
-                  style={{ width: 150, height: '100%' }}
-                >
-                  <View className="absolute -top-20 w-[208px] h-[208px] left-[-100] rounded-full bg-blue-50" />
-                  <Image
-                    source={doctor.image}
-                    className="w-full h-full z-10"
-                    style={{ width: '100%', height: '100%' }}
-                    contentFit="contain"
-                  />
-                </View>
+                <View style={styles.doctorCard}>
+                  {/* Foto Dokter di atas latar studio lembut */}
+                  <View style={styles.doctorPhotoStage}>
+                    <LinearGradient
+                      colors={['#F5F8FD', '#E7F0FD']}
+                      start={{ x: 0.5, y: 0 }}
+                      end={{ x: 0.5, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    {/* Halo lingkaran lembut di belakang dokter */}
+                    <View style={styles.doctorPortraitHalo} pointerEvents="none" />
 
-                {/* Right Side: Doctor Information */}
-                <View className="flex-1 pl-2 justify-between">
-                  <View>
-                    <Text className="text-sm font-bold text-slate-900 mb-1" numberOfLines={1}>
-                      {doctor.name}
-                    </Text>
-
-                    <View className="gap-0.5 mb-1">
-                      {/* Specialization */}
-                      <View className="flex-row items-center">
-                        <MaterialCommunityIcons
-                          name="stethoscope"
-                          size={14}
-                          color="#64748B"
-                          style={{ marginRight: 6, opacity: 0.8 }}
-                        />
-                        <Text className="text-[11px] text-slate-600 font-medium flex-1" numberOfLines={1}>
-                          {doctor.specialization}
-                        </Text>
-                      </View>
-
-                      {/* Hospital */}
-                      <View className="flex-row items-center">
-                        <MaterialCommunityIcons
-                          name="hospital-building"
-                          size={14}
-                          color="#64748B"
-                          style={{ marginRight: 6, opacity: 0.8 }}
-                        />
-                        <Text className="text-[11px] text-slate-600 font-medium flex-1" numberOfLines={1}>
-                          {doctor.hospital}
-                        </Text>
-                      </View>
-
-                      {/* Satisfaction Rating (Thumbs Up) */}
-                      <View className="flex-row items-center">
-                        <MaterialCommunityIcons
-                          name="thumb-up"
-                          size={13}
-                          color="#1E6CEF"
-                          style={{ marginRight: 6, opacity: 0.8 }}
-                        />
-                        <Text className="text-[11px] font-bold text-[#1E6CEF]">{doctor.ratingPercentage}%</Text>
-                      </View>
+                    {/* Badge Pengalaman */}
+                    <View style={styles.doctorExpPill} pointerEvents="none">
+                      <View style={styles.doctorOnlineDot} />
+                      <Text style={styles.doctorExpText}>{doctor.experienceYears} Thn</Text>
                     </View>
+
+                    <Image
+                      source={doctor.image}
+                      style={styles.doctorPhoto}
+                      contentFit="contain"
+                      contentPosition="bottom"
+                    />
                   </View>
 
-                  {/* Reservasi Sekarang Button */}
-                  <Pressable
-                    className="bg-[#1E6CEF] rounded-lg py-1.5 items-center justify-center w-full shadow-md shadow-blue-500/25 active:opacity-90"
-                    onPress={() =>
-                      router.push({
-                        pathname: '/doctor-reservation',
-                        params: { doctorId: doctor.id },
-                      })
-                    }
+                  {/* Strip Biru Rumah Sakit */}
+                  <LinearGradient
+                    colors={['#1B6BF0', '#277CF8']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.doctorHospitalBar}
                   >
-                    <Text className="text-white text-[11px] font-bold tracking-wide">Reservasi Sekarang</Text>
-                  </Pressable>
+                    <Text style={styles.doctorHospitalText} numberOfLines={1}>
+                      {doctor.hospital}
+                    </Text>
+                    <MaterialCommunityIcons name="hospital-building" size={18} color="#FFFFFF" />
+                  </LinearGradient>
+
+                  {/* Informasi Dokter & Rating */}
+                  <View style={styles.doctorInfoFooter}>
+                    <View style={styles.doctorInfoTextGroup}>
+                      <Text style={styles.doctorName} numberOfLines={1}>
+                        {doctor.name}
+                      </Text>
+                      <Text style={styles.doctorSpec} numberOfLines={1}>
+                        {doctor.specialization}
+                      </Text>
+                    </View>
+
+                    <View style={styles.ratingBadge}>
+                      <Ionicons name="star" size={14} color="#F59E0B" />
+                      <Text style={styles.doctorRatingText}>{doctor.rating.toFixed(1)}</Text>
+                    </View>
+                  </View>
                 </View>
               </Pressable>
             ))}
           </ScrollView>
         ) : (
-          <View className="mx-4 bg-white/15 rounded-[14px] p-5 items-center justify-center border border-white/25">
-            <Ionicons name="search-outline" size={26} color="#FFFFFF" style={{ opacity: 0.8 }} />
-            <Text className="text-white text-[13px] font-medium mt-2 text-center">Tidak ada dokter yang cocok dengan pencarian.</Text>
+          <View style={styles.emptyBox}>
+            <Ionicons name="search-outline" size={24} color="#64748B" />
+            <Text style={styles.emptyText}>Tidak ada dokter yang cocok dengan pencarian.</Text>
           </View>
         )}
 
-        {/* ============================================================ */}
-        {/* 4. RUMAH SAKIT TERDEKAT SECTION                             */}
-        {/* ============================================================ */}
-        <View className="flex-row items-center justify-between px-4 mb-3 mt-6">
-          <Text className="text-lg font-bold text-white tracking-wide">Rumah Sakit Terdekat</Text>
+        {/* ── 3. SECTION RUMAH SAKIT TERDEKAT ── */}
+        <View style={[styles.sectionHeader, styles.hospitalSectionHeader]}>
+          <Text style={styles.sectionTitle}>Rumah Sakit Terdekat</Text>
+          <View style={styles.gpsBadge}>
+            <Ionicons name="location" size={12} color="#1E6CEF" />
+            <Text style={styles.gpsBadgeText}>{filteredHospitals.length} Lokasi</Text>
+          </View>
         </View>
 
         {filteredHospitals.length > 0 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 10, gap: 14 }}
-            snapToInterval={CARD_WIDTH + 14}
-            decelerationRate="fast"
-          >
+          <View style={styles.hospitalList}>
             {filteredHospitals.map((hospital: HospitalItem) => (
               <Pressable
                 key={hospital.id}
-                className="bg-white rounded-2xl overflow-hidden shadow-xl shadow-black/20"
-                style={{ width: CARD_WIDTH }}
                 onPress={() =>
                   router.push({
                     pathname: '/hospital-detail',
@@ -347,75 +433,488 @@ export default function CekSekarangScreen() {
                   })
                 }
               >
-                {/* Hospital Photo */}
-                <Image
-                  source={hospital.image}
-                  className="w-full bg-slate-200"
-                  style={{ width: '100%', height: 115 }}
-                  contentFit="cover"
-                  transition={250}
-                />
-
-                {/* Hospital Information */}
-                <View className="p-3">
-                  <Text className="text-sm font-bold text-slate-900 mb-0.5" numberOfLines={1}>
-                    {hospital.name}
-                  </Text>
-
-                  <Text className="text-xs font-semibold text-[#1E6CEF] mb-1" numberOfLines={1}>
-                    {hospital.distance}
-                  </Text>
-
-                  {/* Stars Rating Row */}
-                  <View className="flex-row items-center mb-1">
-                    <Text className="text-[11px] font-bold text-amber-600 mr-1">
-                      {hospital.rating.toFixed(1).replace('.', ',')}
-                    </Text>
-                    <View className="flex-row gap-0.5">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <Ionicons
-                          key={star}
-                          name="star"
-                          size={12}
-                          color="#FBBF24"
-                        />
-                      ))}
-                    </View>
+                <View style={styles.hospitalCard}>
+                  <View style={styles.hospitalPhotoBox}>
+                    <Image
+                      source={hospital.image}
+                      style={styles.hospitalPhoto}
+                      contentFit="cover"
+                      transition={250}
+                    />
                   </View>
 
-                  {/* Address */}
-                  <Text className="text-[11px] text-slate-500 leading-4 mb-2" numberOfLines={1}>
-                    {hospital.address}
-                  </Text>
+                  <View style={styles.hospitalDetails}>
+                    <View>
+                      <Text style={styles.hospitalName} numberOfLines={1}>
+                        {hospital.name}
+                      </Text>
+                      <Text style={styles.hospitalAddress} numberOfLines={1}>
+                        {hospital.address}
+                      </Text>
+                      <Text style={styles.hospitalHours} numberOfLines={1}>
+                        {hospital.openHours}
+                      </Text>
+                    </View>
 
-                  {/* Status & Petunjuk Arah Trigger */}
-                  <View className="flex-row items-center justify-between pt-1.5 border-t border-slate-100">
-                    <Text className="text-[10px] font-semibold text-emerald-600">{hospital.openHours}</Text>
-                    <Pressable
-                      className="p-0.5 active:opacity-70"
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        router.push({
-                          pathname: '/hospital-route',
-                          params: { hospitalId: hospital.id },
-                        });
-                      }}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="navigate-circle" size={20} color="#1E6CEF" />
-                    </Pressable>
+                    <View style={styles.hospitalBottomRow}>
+                      <Text style={styles.hospitalDistance} numberOfLines={1}>
+                        {hospital.distance}
+                      </Text>
+                      <View style={styles.hospitalRatingRow}>
+                        <Ionicons name="star" size={14} color="#FBBF24" />
+                        <Text style={styles.hospitalRatingText}>{hospital.rating.toFixed(1)}</Text>
+                      </View>
+                    </View>
                   </View>
                 </View>
               </Pressable>
             ))}
-          </ScrollView>
+          </View>
         ) : (
-          <View className="mx-4 bg-white/15 rounded-[14px] p-5 items-center justify-center border border-white/25">
-            <Ionicons name="business-outline" size={26} color="#FFFFFF" style={{ opacity: 0.8 }} />
-            <Text className="text-white text-[13px] font-medium mt-2 text-center">Tidak ada rumah sakit yang cocok dengan pencarian.</Text>
+          <View style={styles.emptyBox}>
+            <Ionicons name="business-outline" size={24} color="#64748B" />
+            <Text style={styles.emptyText}>Tidak ada rumah sakit yang cocok dengan pencarian.</Text>
           </View>
         )}
       </ScrollView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+
+  // ─── Header & Hero Banner ──────────────────────────────────────────────
+  headerSection: {
+    position: 'relative',
+    paddingBottom: 28,
+  },
+  blueHeaderBackdrop: {
+    position: 'absolute',
+    top: -300,
+    left: 0,
+    right: 0,
+    overflow: 'hidden',
+  },
+  backdropGlowTop: {
+    position: 'absolute',
+    top: 250,
+    right: -60,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  topNavBar: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    zIndex: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  topNavLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  topNavRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  navIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navIconBtnActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
+  },
+  topNavTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  heroCardOuter: {
+    marginHorizontal: 20,
+    position: 'relative',
+    overflow: 'visible',
+  },
+  heroCardInner: {
+    height: HERO_CARD_HEIGHT,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.58)',
+    backgroundColor: '#4E97F7',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  heroAccentCircleLarge: {
+    position: 'absolute',
+    right: -46,
+    top: -36,
+    width: 224,
+    height: 224,
+    borderRadius: 112,
+    backgroundColor: 'rgba(24, 102, 236, 0.32)',
+  },
+  heroAccentCircleSmall: {
+    position: 'absolute',
+    right: 26,
+    bottom: -54,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  heroTopSheen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 44,
+  },
+  heroTextWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingLeft: 20,
+    paddingRight: 114,
+  },
+  heroTitle: {
+    fontSize: 18.5,
+    lineHeight: 24.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+    textShadowColor: 'rgba(15, 23, 42, 0.12)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  heroCloudWrapper: {
+    position: 'absolute',
+    top: -26,
+    right: -8,
+    width: 94,
+    height: 72,
+    zIndex: 20,
+  },
+  heroCloudAsset: {
+    width: '100%',
+    height: '100%',
+  },
+  heroAmbulanceWrapper: {
+    position: 'absolute',
+    bottom: -20,
+    right: -12,
+    width: 130,
+    height: 90,
+    zIndex: 20,
+  },
+  heroAmbulanceAsset: {
+    width: '100%',
+    height: '100%',
+  },
+
+  // ─── Expandable Search ─────────────────────────────────────────────────
+  searchContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 14,
+    height: 44,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#0F172A',
+    paddingVertical: 0,
+  },
+
+  // ─── Section Headers ───────────────────────────────────────────────────
+  sectionHeader: {
+    paddingHorizontal: 20,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  hospitalSectionHeader: {
+    marginTop: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: -0.2,
+  },
+  sectionCountBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  sectionCountText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E6CEF',
+  },
+  gpsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  gpsBadgeText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E6CEF',
+  },
+
+  // ─── Doctor Cards ──────────────────────────────────────────────────────
+  doctorScrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 6,
+    gap: 14,
+  },
+  doctorCard: {
+    width: DOCTOR_CARD_WIDTH,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#3B82F6',
+    overflow: 'hidden',
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  doctorPhotoStage: {
+    height: 176,
+    backgroundColor: '#EEF2F7',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  doctorPortraitHalo: {
+    position: 'absolute',
+    bottom: -24,
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+  },
+  doctorExpPill: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(37, 117, 238, 0.15)',
+  },
+  doctorOnlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  doctorExpText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  doctorPhoto: {
+    width: '88%',
+    height: '94%',
+  },
+  doctorHospitalBar: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  doctorHospitalText: {
+    color: '#FFFFFF',
+    fontSize: 13.5,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 8,
+  },
+  doctorInfoFooter: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  doctorInfoTextGroup: {
+    flex: 1,
+    marginRight: 8,
+  },
+  doctorName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: -0.2,
+  },
+  doctorSpec: {
+    fontSize: 12.5,
+    fontWeight: '500',
+    color: '#64748B',
+    marginTop: 3,
+  },
+  ratingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  doctorRatingText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+
+  // ─── Hospital List Cards ───────────────────────────────────────────────
+  hospitalList: {
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  hospitalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#60A5FA',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  hospitalPhotoBox: {
+    width: 112,
+    height: 84,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
+  },
+  hospitalPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  hospitalDetails: {
+    flex: 1,
+    marginLeft: 14,
+    justifyContent: 'space-between',
+    height: 84,
+    paddingVertical: 2,
+  },
+  hospitalName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E6CEF',
+    letterSpacing: -0.2,
+  },
+  hospitalAddress: {
+    fontSize: 11.5,
+    color: '#64748B',
+    marginTop: 3,
+  },
+  hospitalHours: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#2575EE',
+    marginTop: 2,
+  },
+  hospitalBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  hospitalDistance: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#0F172A',
+    flex: 1,
+    marginRight: 8,
+  },
+  hospitalRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  hospitalRatingText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#F59E0B',
+  },
+
+  // ─── Empty State ───────────────────────────────────────────────────────
+  emptyBox: {
+    marginHorizontal: 20,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+});

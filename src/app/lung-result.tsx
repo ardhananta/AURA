@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CoughPredictionResponse } from '@/types/ai';
 import { lungHistoryService, SavedCoughScan } from '@/services/lungHistoryService';
+import { CoughSpectrogramVisualizer } from '@/components/cough/CoughSpectrogramVisualizer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -238,6 +239,9 @@ export default function LungResultScreen() {
             </LinearGradient>
           </View>
 
+          {/* 2B. MEL-SPECTROGRAM, VISUAL PREDICTION OVERLAY & STEP EXPLAINER */}
+          <CoughSpectrogramVisualizer data={data} />
+
           {/* 3. PROBABILITY DISTRIBUTION (ICBHI) */}
           {data.all_probabilities && Object.keys(data.all_probabilities).length > 0 && (
             <View style={styles.sectionCard}>
@@ -249,7 +253,10 @@ export default function LungResultScreen() {
               <View style={styles.probList}>
                 {Object.entries(data.all_probabilities).map(([key, rawVal]) => {
                   const probVal = typeof rawVal === 'number' ? rawVal : 0;
-                  const percent = Math.min(100, Math.max(0, Math.round(probVal * 100)));
+                  const percent =
+                    probVal <= 1
+                      ? Math.min(100, Math.max(0, Math.round(probVal * 100)))
+                      : Math.min(100, Math.max(0, Math.round(probVal)));
                   const isTop = key.toLowerCase() === (data.prediction || '').toLowerCase();
                   const barColor = isTop ? statusColor : '#94A3B8';
 

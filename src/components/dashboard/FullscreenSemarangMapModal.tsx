@@ -204,6 +204,12 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
     });
   }, [onClose, router]);
 
+  /** Open Universal Navigation directly from the map modal */
+  const handleOpenUniversalNavigation = useCallback(() => {
+    onClose();
+    router.push('/universal-navigation');
+  }, [onClose, router]);
+
   useEffect(() => {
     if (userLocation) {
       setActiveCity({
@@ -897,22 +903,34 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
           </Pressable>
         </View>
 
-        {/* 4. FLOATING LEGEND (ONLY WHEN BOTTOM DETAIL CARD IS CLOSED) */}
-        {!selectedZoneResult && (
-          <View style={[styles.legendCard, { bottom: insets.bottom + 28 }]}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
-              <Text style={styles.legendLabel}>Bahaya</Text>
+        {/* 4. FLOATING LEGEND & DIRECT NAVIGATION TRIGGER (WHEN DETAIL CARD IS CLOSED) */}
+        {!selectedZoneResult && !searchTarget && (
+          <>
+            <View style={[styles.legendCard, { bottom: insets.bottom + 84 }]}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+                <Text style={styles.legendLabel}>Bahaya</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+                <Text style={styles.legendLabel}>Waspada</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
+                <Text style={styles.legendLabel}>Aman</Text>
+              </View>
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
-              <Text style={styles.legendLabel}>Waspada</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-              <Text style={styles.legendLabel}>Aman</Text>
-            </View>
-          </View>
+
+            <Pressable
+              onPress={handleOpenUniversalNavigation}
+              style={[styles.floatingNavPill, { bottom: insets.bottom + 28 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Buka Navigasi Rute"
+            >
+              <Ionicons name="navigate" size={16} color="#FFFFFF" />
+              <Text style={styles.floatingNavPillText}>Mulai Navigasi</Text>
+            </Pressable>
+          </>
         )}
 
         {/* 5. INTERACTIVE HOTSPOT DETAIL BOTTOM CARD */}
@@ -1266,6 +1284,29 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '700',
     color: '#475569',
+  },
+  floatingNavPill: {
+    position: 'absolute',
+    left: 14,
+    zIndex: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1E6CEF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 999,
+    shadowColor: '#1E6CEF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  floatingNavPillText: {
+    color: '#FFFFFF',
+    fontSize: 13.5,
+    fontWeight: '800',
+    letterSpacing: -0.1,
   },
 
   /* DETAIL CARD */

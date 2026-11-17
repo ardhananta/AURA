@@ -426,10 +426,19 @@ export default function PollutionImpactScreen() {
 
               <View style={styles.headerRightActions}>
                 <Pressable
+                  onPress={() => router.push('/daily-journey')}
+                  style={styles.backButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Tracking Harian"
+                >
+                  <Ionicons name="map-outline" size={20} color="#0284C7" />
+                </Pressable>
+
+                <Pressable
                   onPress={handleNavigateToAiImpact}
                   style={[styles.backButton, styles.aiHeaderBtn]}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityLabel="Analisis Dampak AI"
+                  accessibilityLabel="Analisis Penyakit Berdasarkan Aktivitas dan Polusi"
                 >
                   <Ionicons name="sparkles" size={18} color="#FFFFFF" />
                 </Pressable>
@@ -639,10 +648,10 @@ export default function PollutionImpactScreen() {
                 </View>
 
                 <Text style={styles.aiImpactTitle}>
-                  Analisis Dampak Polusi ke Tubuh (1 Minggu)
+                  Analisis Penyakit Berdasarkan Aktivitas dan Polusi
                 </Text>
                 <Text style={styles.aiImpactDesc}>
-                  Model AI memprediksi langsung dampak akumulasi polusi terhadap Level Oksigen, Suhu Tubuh, Kondisi Kulit, dan Risiko Dehidrasi.
+                  Model AI memprediksi risiko penyakit &amp; kondisi tubuh (Oksigen, Suhu, Kulit, Dehidrasi) berdasarkan riwayat aktivitas dan paparan polusi Anda.
                 </Text>
 
                 <View style={styles.aiImpactActionRow}>
@@ -652,6 +661,26 @@ export default function PollutionImpactScreen() {
                   </View>
                 </View>
               </LinearGradient>
+            </Pressable>
+
+            {/* 1.6. KARTU TRACKING HARIAN (Riwayat Perjalanan & Paparan Aktivitas) */}
+            <Pressable
+              style={styles.trackingCard}
+              onPress={() => router.push('/daily-journey')}
+              android_ripple={{ color: 'rgba(16,185,129,0.12)' }}
+            >
+              <View style={styles.trackingIconBox}>
+                <Ionicons name="map" size={22} color="#059669" />
+              </View>
+              <View style={styles.trackingTextCol}>
+                <Text style={styles.trackingTitle}>Tracking Harian</Text>
+                <Text style={styles.trackingDesc}>
+                  Pantau rute perjalanan &amp; paparan polusi harian untuk analisis aktivitas
+                </Text>
+              </View>
+              <View style={styles.trackingArrowBadge}>
+                <Ionicons name="chevron-forward" size={16} color="#059669" />
+              </View>
             </Pressable>
 
             {/* 2. HORIZONTAL CALENDAR / DAY CAROUSEL (7 Days) */}
@@ -902,7 +931,7 @@ export default function PollutionImpactScreen() {
                   >
                     <Ionicons name="sparkles" size={18} color="#FACC15" style={{ marginRight: 8 }} />
                     <Text style={styles.bottomAiCtaText}>
-                      Buka Hasil Analisis Dampak Polusi AI Lengkap
+                      Buka Analisis Penyakit Berdasarkan Aktivitas &amp; Polusi
                     </Text>
                     <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
                   </LinearGradient>
@@ -1374,6 +1403,52 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trackingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 12,
+    borderWidth: 1.5,
+    borderColor: '#A7F3D0',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  trackingIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trackingTextCol: {
+    flex: 1,
+    marginHorizontal: 12,
+  },
+  trackingTitle: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  trackingDesc: {
+    fontSize: 11.5,
+    color: '#64748B',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  trackingArrowBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#ECFDF5',
     alignItems: 'center',
     justifyContent: 'center',
   },

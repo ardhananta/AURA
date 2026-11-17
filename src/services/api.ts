@@ -196,6 +196,5 @@ export const authApi = {
   },
 };
 
-export * from './zonesApi';
 export * from './terrainService';
 export * from './locationService';

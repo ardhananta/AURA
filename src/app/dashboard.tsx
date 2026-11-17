@@ -1,6 +1,5 @@
 import { SemarangMapCard } from '@/components/dashboard/SemarangMapCard';
 import { FullscreenSemarangMapModal } from '@/components/dashboard/FullscreenSemarangMapModal';
-import { NavigationCardsSection } from '@/components/dashboard/NavigationCardsSection';
 import { AuraColors } from '@/constants/aura-theme';
 import { useAuth } from '@/context/auth-context';
 import { authApi } from '@/services/api';
@@ -282,7 +281,7 @@ export default function DashboardScreen() {
     const msg =
       typeof customMessage === 'string'
         ? customMessage
-        : 'Menyiapkan Analisis Polusi & Cuaca...';
+        : 'Menyiapkan Analisis Penyakit & Polusi...';
     setTransitionSplash({
       visible: true,
       message: msg,
@@ -418,19 +417,19 @@ export default function DashboardScreen() {
             </Text>
           </Pressable>
 
-          {/* 3. Analisis Dampak Polusi (Navigasi dengan data GPS real-time) */}
+          {/* 3. Analisis Penyakit Berdasarkan Aktivitas dan Polusi */}
           <Pressable
             onPress={navigateToPollutionImpact}
             style={({ pressed }) => [
               {
                 alignItems: 'center',
-                width: 92,
+                width: 114,
                 opacity: pressed ? 0.78 : 1,
                 transform: [{ scale: pressed ? 0.95 : 1 }],
               },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Analisis Dampak Polusi"
+            accessibilityLabel="Analisis Penyakit Berdasarkan Aktivitas dan Polusi"
             hitSlop={6}
           >
             <Image
@@ -441,14 +440,14 @@ export default function DashboardScreen() {
             <Text
               style={{
                 color: '#1E293B',
-                fontSize: 11.5,
+                fontSize: 11,
                 fontWeight: '700',
                 textAlign: 'center',
                 marginTop: 6,
-                lineHeight: 15,
+                lineHeight: 14,
               }}
             >
-              Analisis Dampak{'\n'}Polusi
+              Analisis Penyakit{'\n'}Berdasarkan{'\n'}Aktivitas & Polusi
             </Text>
           </Pressable>
 
@@ -486,9 +485,6 @@ export default function DashboardScreen() {
             </Text>
           </Pressable>
         </ScrollView>
-
-        {/* 2.5 NAVIGATION & TRACKING CARDS */}
-        <NavigationCardsSection />
 
         {/* 3. DYNAMIC STATUS HORIZONTAL CAROUSEL CARDS */}
         <ScrollView

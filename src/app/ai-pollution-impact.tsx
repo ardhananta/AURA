@@ -259,7 +259,7 @@ export default function AiPollutionImpactScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Top Header Row with Back Button */}
+        {/* Top Header Row with Back Button & Tracking Harian Link */}
         <View style={styles.topHeaderBar}>
           <Pressable
             style={styles.backButton}
@@ -269,13 +269,24 @@ export default function AiPollutionImpactScreen() {
           >
             <Ionicons name="arrow-back" size={24} color="#0284C7" />
           </Pressable>
+
+          <Pressable
+            style={styles.trackingHeaderPill}
+            onPress={() => router.push('/daily-journey')}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Buka Tracking Harian"
+          >
+            <Ionicons name="map-outline" size={14} color="#059669" />
+            <Text style={styles.trackingHeaderPillText}>Tracking Harian</Text>
+          </Pressable>
         </View>
 
-        {/* Title Section matching Mockup */}
+        {/* Title Section */}
         <View style={styles.titleContainer}>
-          <Text style={styles.primaryTitle}>Analisis Dampak</Text>
-          <Text style={styles.primaryTitle}>Akibat Polusi Dalam</Text>
-          <Text style={styles.heroWeeklyText}>1 Minggu</Text>
+          <Text style={styles.primaryTitle}>Analisis Penyakit</Text>
+          <Text style={styles.primaryTitle}>Berdasarkan Aktivitas</Text>
+          <Text style={styles.heroWeeklyText}>&amp; Polusi</Text>
 
           {/* Doctor Advisory Link */}
           <View style={styles.doctorNoticeRow}>
@@ -531,7 +542,24 @@ const styles = StyleSheet.create({
   topHeaderBar: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 6,
+  },
+  trackingHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  trackingHeaderPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
   },
   backButton: {
     width: 40,
@@ -554,11 +582,11 @@ const styles = StyleSheet.create({
     lineHeight: 28,
   },
   heroWeeklyText: {
-    fontSize: 48,
+    fontSize: 38,
     fontWeight: '900',
     color: '#1E293B',
     textAlign: 'center',
-    lineHeight: 56,
+    lineHeight: 46,
     marginVertical: 4,
     letterSpacing: -0.5,
   },

@@ -336,6 +336,21 @@ const ResultCard: React.FC<{
   );
 };
 
+const COUGH_RECORDING_OPTIONS = {
+  ...RecordingPresets.HIGH_QUALITY,
+  sampleRate: 44100,
+  numberOfChannels: 1,
+  bitRate: 128000,
+  isMeteringEnabled: true,
+  android: {
+    extension: '.m4a',
+    outputFormat: 'mpeg4' as const,
+    audioEncoder: 'aac' as const,
+    sampleRate: 44100,
+    audioSource: 'mic' as const,
+  },
+};
+
 // ═════════════════════════════════════════════════════════════════════
 // ─── Main Screen ─────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════
@@ -343,13 +358,18 @@ export default function LungCheckScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorder = useAudioRecorder(COUGH_RECORDING_OPTIONS);
   const converterRef = useRef<AudioToWavConverterRef>(null);
 
   const [state, setState] = useState<DetectionState>('idle');
   const [timer, setTimer] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [micLevelPct, setMicLevelPct] = useState(0);
+  const maxMeteringDbRef = useRef<number>(-160);
+  const recordModeRef = useRef<'pcm' | 'native'>('native');
+  const isProcessingRef = useRef<boolean>(false);
   const [recordedUri, setRecordedUri] = useState<string | null>(null);
+  const [analysisStage, setAnalysisStage] = useState<number>(0);
   const [resultData, setResultData] = useState<CoughPredictionResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -391,24 +411,45 @@ export default function LungCheckScreen() {
     transform: [{ scale: btnScale.value }],
   }));
 
-  // Timer counter for 5s recording
+  // Timer counter + live microphone metering for 5s recording
   useEffect(() => {
+    let meterId: ReturnType<typeof setInterval> | null = null;
     if (state === 'listening') {
       setTimer(0);
+      setMicLevelPct(0);
+      maxMeteringDbRef.current = -160;
       timerRef.current = setInterval(() => {
         setTimer((t) => t + 1);
       }, 1000);
+      if (recordModeRef.current === 'native') {
+        meterId = setInterval(() => {
+          try {
+            const st = audioRecorder.getStatus();
+            if (typeof st?.metering === 'number') {
+              if (st.metering > maxMeteringDbRef.current) {
+                maxMeteringDbRef.current = st.metering;
+              }
+              const pct = Math.max(0, Math.min(100, Math.round(((st.metering + 60) / 55) * 100)));
+              setMicLevelPct(pct);
+            }
+          } catch {
+            // ignore
+          }
+        }, 100);
+      }
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
+      setMicLevelPct(0);
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (meterId) clearInterval(meterId);
     };
-  }, [state]);
+  }, [state, audioRecorder]);
 
   const handleStop = useCallback(async () => {
     try {
-      if (audioRecorder.isRecording) {
+      if (recordModeRef.current === 'native' && audioRecorder.isRecording) {
         await audioRecorder.stop();
         setRecordedUri(audioRecorder.uri);
       }
@@ -428,63 +469,92 @@ export default function LungCheckScreen() {
   // Process audio with ONNX ICBHI model (TANPA DUMMY DATA)
   useEffect(() => {
     if (state !== 'analyzing') return;
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
 
     let isMounted = true;
     const processCoughAudio = async () => {
       try {
-        if (audioRecorder.isRecording) {
-          await audioRecorder.stop();
+        setAnalysisStage(0);
+        let finalAudioUri: string | null = null;
+
+        if (recordModeRef.current === 'pcm' && converterRef.current) {
+          console.log('[CoughCheck] Mengambil rekaman PCM langsung dari mikrofon WebView...');
+          const wavRes = await converterRef.current.stopDirectPcmRecording(16000);
+          finalAudioUri = wavRes.uri;
+          console.log(
+            `[CoughCheck] Rekaman PCM WAV siap: dur=${wavRes.duration.toFixed(2)}s sr=${wavRes.sampleRate} peak=${wavRes.peakAmp.toFixed(5)} rms=${wavRes.rms.toFixed(5)}`
+          );
+          if (wavRes.isSilent) {
+            throw new Error(
+              'Suara batuk tidak tertangkap pada mikrofon (amplitudo 0 dB). Pastikan mikrofon tidak dibisukan/dipakai aplikasi lain lalu coba batuk lebih dekat ke mikrofon.'
+            );
+          }
+        } else {
+          try {
+            if (audioRecorder.isRecording) {
+              await audioRecorder.stop();
+            }
+          } catch {
+            // ignore
+          }
+
+          const uri = audioRecorder.uri || recordedUri;
+          if (!uri) {
+            throw new Error(
+              'File audio rekaman batuk tidak ditemukan. Silakan tekan tombol Mulai dan batuk ke arah mikrofon.'
+            );
+          }
+
+          finalAudioUri = uri;
+          if (converterRef.current) {
+            console.log('[CoughCheck] Mengonversi audio native ke WAV 16kHz mono...');
+            const wavRes = await converterRef.current.convertToWav(uri, 16000);
+            finalAudioUri = wavRes.uri;
+            console.log(
+              `[CoughCheck] Konversi WAV selesai: dur=${wavRes.duration.toFixed(2)}s sr=${wavRes.sampleRate} peak=${wavRes.peakAmp.toFixed(5)} rms=${wavRes.rms.toFixed(5)}`
+            );
+            if (wavRes.isSilent) {
+              throw new Error(
+                'Suara batuk tidak tertangkap pada rekaman (amplitudo 0 dB). Pastikan mikrofon aktif dan coba batuk lebih dekat ke mikrofon.'
+              );
+            }
+          }
         }
-      } catch {
-        // ignore
-      }
 
-      const uri = audioRecorder.uri || recordedUri;
-      if (!uri) {
-        if (isMounted) {
-          setErrorMessage('File audio rekaman batuk tidak ditemukan. Silakan tekan tombol Mulai dan batuk ke arah mikrofon.');
-          setState('error');
-        }
-        return;
-      }
+        const waypoints = backgroundMobilityTracker.getCollectedWaypoints();
+        let totalOutdoor = 0;
+        waypoints.forEach((wp) => {
+          if (wp.classification === 'outdoor') {
+            totalOutdoor += wp.duration_minutes;
+          }
+        });
 
-      // Ambil data mobilitas real dari background tracker pengguna (tanpa data palsu)
-      const waypoints = backgroundMobilityTracker.getCollectedWaypoints();
-      let totalOutdoor = 0;
-      waypoints.forEach((wp) => {
-        if (wp.classification === 'outdoor') {
-          totalOutdoor += wp.duration_minutes;
-        }
-      });
+        const mobilityContext: CoughMobilityContext = {
+          outdoorMinutes: totalOutdoor > 0 ? totalOutdoor : undefined,
+          usia: user?.usia,
+        };
 
-      const mobilityContext: CoughMobilityContext = {
-        outdoorMinutes: totalOutdoor > 0 ? totalOutdoor : undefined,
-        usia: user?.usia,
-      };
+        if (isMounted) setAnalysisStage(1);
+        const stageTimer = setTimeout(() => {
+          if (isMounted) setAnalysisStage(2);
+        }, 650);
 
-      // ─── Konversi file audio rekaman (.m4a/.aac) ke standar WAV 16-bit PCM (16kHz) sebelum dikirim ───
-      let finalAudioUri = uri;
-      try {
-        if (converterRef.current) {
-          console.log('[CoughCheck] Mengonversi audio batuk ke format WAV 16kHz sebelum dikirim ke server AI...');
-          finalAudioUri = await converterRef.current.convertToWav(uri, 16000);
-          console.log('[CoughCheck] Konversi ke WAV berhasil:', finalAudioUri);
-        }
-      } catch (convErr: any) {
-        console.warn('[CoughCheck] Konversi ke WAV gagal, fallback ke original:', convErr?.message || convErr);
-      }
-
-      try {
-        const response = await aiService.predictCough(finalAudioUri, mobilityContext);
-        if (isMounted) {
-          // Simpan hasil ke riwayat lokal & buka dedicated result page
-          const saved = await lungHistoryService.saveScan(response, finalAudioUri);
-          setState('idle');
-          setRecordedUri(null);
-          router.push({
-            pathname: '/lung-result',
-            params: { id: saved.id },
-          });
+        try {
+          const response = await aiService.predictCough(finalAudioUri!, mobilityContext);
+          clearTimeout(stageTimer);
+          if (isMounted) {
+            const saved = await lungHistoryService.saveScan(response, finalAudioUri!);
+            setState('idle');
+            setRecordedUri(null);
+            router.push({
+              pathname: '/lung-result',
+              params: { id: saved.id },
+            });
+          }
+        } catch (apiErr) {
+          clearTimeout(stageTimer);
+          throw apiErr;
         }
       } catch (err: any) {
         console.error('[CoughCheck] AI prediction failed:', err);
@@ -495,6 +565,8 @@ export default function LungCheckScreen() {
           );
           setState('error');
         }
+      } finally {
+        isProcessingRef.current = false;
       }
     };
 
@@ -513,18 +585,44 @@ export default function LungCheckScreen() {
 
     try {
       const perm = await requestRecordingPermissionsAsync();
-      if (perm.granted) {
-        await setAudioModeAsync({
-          allowsRecording: true,
-          playsInSilentMode: true,
-        });
-        await audioRecorder.prepareToRecordAsync();
-        audioRecorder.record();
-        setState('listening');
-      } else {
+      if (!perm.granted) {
         setErrorMessage('Izin rekaman mikrofon ditolak. Silakan izinkan akses mikrofon di pengaturan perangkat Anda.');
         setState('error');
+        return;
       }
+
+      setRecordedUri(null);
+      setErrorMessage(null);
+      isProcessingRef.current = false;
+
+      // Prioritas 1: Direct PCM WebView Recorder (langsung uncompressed PCM -> WAV, bebas codec M4A Android)
+      let pcmStarted = false;
+      if (converterRef.current) {
+        try {
+          pcmStarted = await converterRef.current.startDirectPcmRecording((pct) => {
+            setMicLevelPct(pct);
+          });
+        } catch {
+          pcmStarted = false;
+        }
+      }
+
+      if (pcmStarted) {
+        recordModeRef.current = 'pcm';
+        setState('listening');
+        return;
+      }
+
+      // Fallback: Native expo-audio MediaRecorder
+      recordModeRef.current = 'native';
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      await audioRecorder.prepareToRecordAsync(COUGH_RECORDING_OPTIONS);
+      audioRecorder.record();
+      setState('listening');
     } catch (err: any) {
       console.warn('[CoughCheck] Record start error:', err);
       setErrorMessage('Gagal mengaktifkan mikrofon: ' + (err?.message || 'Error'));
@@ -548,7 +646,7 @@ export default function LungCheckScreen() {
         style={StyleSheet.absoluteFill}
       />
 
-      {/* ─── 1. TOP NAVIGATION & BALANCED CENTERED SWITCHER BAR ─── */}
+      {/* ─── 1. TOP BAR (Back & Riwayat only — clean without switcher nav) ─── */}
       <View style={[styles.topNavBar, { paddingTop: insets.top + 8 }]}>
         <Pressable
           style={styles.backBtn}
@@ -558,22 +656,6 @@ export default function LungCheckScreen() {
         >
           <Ionicons name="arrow-back" size={22} color="white" />
         </Pressable>
-
-        {/* Centered Segmented Switcher */}
-        <View style={styles.segmentedControl}>
-          <View style={[styles.segmentOption, styles.segmentOptionActive]}>
-            <Ionicons name="mic" size={14} color="#2373F4" style={{ marginRight: 4 }} />
-            <Text style={styles.segmentTextActive}>Deteksi Batuk</Text>
-          </View>
-
-          <Pressable
-            style={styles.segmentOption}
-            onPress={() => router.replace('/skin-check')}
-          >
-            <Ionicons name="scan-outline" size={14} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
-            <Text style={styles.segmentTextInactive}>Scan Kulit</Text>
-          </Pressable>
-        </View>
 
         {/* Riwayat Batuk Button */}
         <Pressable
@@ -618,7 +700,57 @@ export default function LungCheckScreen() {
             </View>
           </Animated.View>
 
-          {state === 'analyzing' && <PulsingDots />}
+          {state === 'listening' && (
+            <View style={styles.liveMeterCard}>
+              <Text style={styles.liveMeterLabel}>
+                {micLevelPct > 8 ? 'Mikrofon Aktif • Suara Terdeteksi' : 'Menunggu suara batuk...'}
+              </Text>
+              <View style={styles.liveMeterTrack}>
+                <View
+                  style={[
+                    styles.liveMeterFill,
+                    {
+                      width: `${Math.max(4, micLevelPct)}%`,
+                      backgroundColor: micLevelPct > 18 ? '#34D399' : '#93C5FD',
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          )}
+
+          {state === 'analyzing' && (
+            <>
+              <PulsingDots />
+              <View style={styles.pipelineProgressCard}>
+                {[
+                  '01. Konversi Audio 16 kHz Mono WAV',
+                  '02. Bandpass 100–2000 Hz & Mel-Spektrogram 128×128',
+                  '03. Prediksi CNN ONNX ICBHI & Pemetaan Visual',
+                ].map((label, idx) => {
+                  const done = analysisStage > idx;
+                  const active = analysisStage === idx;
+                  return (
+                    <View key={label} style={styles.pipelineStepRow}>
+                      <Ionicons
+                        name={done ? 'checkmark-circle' : active ? 'radio-button-on' : 'ellipse-outline'}
+                        size={15}
+                        color={done ? '#34D399' : active ? '#FFFFFF' : 'rgba(255,255,255,0.45)'}
+                      />
+                      <Text
+                        style={[
+                          styles.pipelineStepText,
+                          (done || active) && { color: '#FFFFFF', fontWeight: '700' },
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          )}
         </View>
       ) : state === 'result' && resultData ? (
         <View style={styles.centerArea}>
@@ -796,6 +928,57 @@ const styles = StyleSheet.create({
     height: 11,
     borderRadius: 6,
     backgroundColor: 'rgba(255,255,255,0.95)',
+  },
+  liveMeterCard: {
+    marginTop: 20,
+    width: '78%',
+    maxWidth: 300,
+    backgroundColor: 'rgba(15, 23, 42, 0.24)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveMeterLabel: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  liveMeterTrack: {
+    width: '100%',
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    overflow: 'hidden',
+  },
+  liveMeterFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  pipelineProgressCard: {
+    marginTop: 18,
+    backgroundColor: 'rgba(15, 23, 42, 0.28)',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    width: '86%',
+    maxWidth: 340,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    gap: 8,
+  },
+  pipelineStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pipelineStepText: {
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.72)',
+    flex: 1,
   },
 
   /* Result card */

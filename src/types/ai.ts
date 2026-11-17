@@ -13,6 +13,64 @@ export interface CoughEnvironmentalCorrelation {
   clinical_correlation_notes?: string;
 }
 
+export interface CoughAcousticRegion {
+  id: string;
+  label: string;
+  short_tag: string;
+  kind: 'normal' | 'wheeze' | 'crackle' | 'tonal' | string;
+  x_start_pct: number;
+  x_end_pct: number;
+  y_top_pct: number;
+  y_bottom_pct: number;
+  time_start_sec: number;
+  time_end_sec: number;
+  freq_low_hz: number;
+  freq_high_hz: number;
+  detail: string;
+}
+
+export interface CoughMelAxisTick {
+  label: string;
+  freq_hz: number;
+  y_pct: number;
+}
+
+export interface CoughExplanationStep {
+  step: string;
+  title: string;
+  metric: string;
+  description: string;
+}
+
+export interface CoughAcousticMetrics {
+  duration_sec: number;
+  window_sec: number;
+  recorded_duration_sec?: number;
+  peak_frequency_hz: number;
+  spectral_centroid_hz: number;
+  transient_burst_count: number;
+  tonal_persistency_pct: number;
+  low_band_pct: number;
+  mid_band_pct: number;
+  high_band_pct: number;
+  bandpass_retention_pct?: number;
+  max_energy_db?: number;
+}
+
+export interface CoughVisualization {
+  spectrogram_image: string;
+  waveform_envelope: number[];
+  detected_regions: CoughAcousticRegion[];
+  mel_axis_ticks: CoughMelAxisTick[];
+  bandpass_box?: {
+    y_top_pct: number;
+    y_bottom_pct: number;
+  };
+  acoustic_metrics: CoughAcousticMetrics;
+  explanation_steps: CoughExplanationStep[];
+  visual_summary?: string;
+}
+
 export interface CoughPredictionResponse {
   prediction: string; // 'Wheeze' | 'Crackle' | 'Normal' | 'Crackle + Wheeze'
   confidence: number;
@@ -22,6 +80,7 @@ export interface CoughPredictionResponse {
   clinical_interpretation: string;
   all_probabilities: Record<string, number>;
   environmental_correlation?: CoughEnvironmentalCorrelation;
+  visualization?: CoughVisualization;
 }
 
 export interface CoughMobilityContext {
