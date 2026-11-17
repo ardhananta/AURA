@@ -30,7 +30,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { mobilityService } from '@/services/mobilityService';
 import { backgroundMobilityTracker } from '@/services/backgroundMobilityTracker';
 import { ExposureStats } from '@/types/mobility';
-import { PageTransitionSplash } from '@/components/splash/CityBuildingSplash';
+import { PageTransitionSplash } from '@/components/splash/AuraCloudSplash';
 
 function getAqiGradient(aqi: number): [string, string] {
   if (aqi <= 50) return ['#34D399', '#10B981']; // Aman

@@ -42,7 +42,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { CityBuildingSplash, PageTransitionSplash } from '@/components/splash/CityBuildingSplash';
+import { PageTransitionSplash } from '@/components/splash/AuraCloudSplash';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -177,7 +177,6 @@ export default function PollutionImpactScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
-  const [animKey, setAnimKey] = useState(0);
   const [isNavigatingToAi, setIsNavigatingToAi] = useState(false);
 
   // Update landscape strictly according to real-time location & elevation
@@ -263,7 +262,6 @@ export default function PollutionImpactScreen() {
       setIsLoading(true);
     }
     setErrorMessage(null);
-    setAnimKey((k) => k + 1);
 
     try {
       const data = await zonesApi.getWeeklyAnalysis({
@@ -391,19 +389,13 @@ export default function PollutionImpactScreen() {
       >
         {/* Top Sky + Landmark Hero Container with DYNAMIC REALTIME LANDSCAPE IMAGE */}
         <View style={[styles.heroWrapper, { height: HERO_HEIGHT }]}>
-          {activeLandscape === 'kota' ? (
-            /* ── KOTA: Animasi Mulus Gedung Bertingkat Muncul Berurutan dari Aset kota.png ── */
-            <CityBuildingSplash key={animKey} heroHeight={HERO_HEIGHT} />
-          ) : (
-            /* ── Non-kota: standard static image hero ── */
-            <Image
-              source={getLandscapeAsset(activeLandscape)}
-              style={StyleSheet.absoluteFill}
-              contentFit="cover"
-              contentPosition="bottom"
-              transition={300}
-            />
-          )}
+          <Image
+            source={getLandscapeAsset(activeLandscape)}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            contentPosition="bottom"
+            transition={300}
+          />
 
           <View style={[styles.heroContentOverlay, { paddingTop: topPadding }]}>
             {/* Header Navigation Bar */}
@@ -444,7 +436,6 @@ export default function PollutionImpactScreen() {
 
                 <Pressable
                   onPress={() => {
-                    setAnimKey((k) => k + 1);
                     fetchAnalysis();
                     fetchNearbyHotspots(currentLocation.lat, currentLocation.lon);
                   }}

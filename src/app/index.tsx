@@ -18,7 +18,7 @@ import { AuthTransition, AnimatedAuthHeader, AnimatedAuthBody } from '@/componen
 import { useAuth } from '@/context/auth-context';
 import { getErrorMessage } from '@/utils/error-mapper';
 import { isProfileComplete } from '@/types/auth';
-import { PageTransitionSplash } from '@/components/splash/CityBuildingSplash';
+import { PageTransitionSplash } from '@/components/splash/AuraCloudSplash';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -55,39 +55,17 @@ export default function LoginScreen() {
   // Hanya tampilkan splash jika sesi sedang dicek dan belum melewati safety timeout
   if ((isAuthLoading || (isAuthenticated && user)) && showSplash) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+      <View style={{ flex: 1, backgroundColor: '#2B71EE' }}>
         <PageTransitionSplash
           visible={true}
           message="Menyambungkan sesi aktif..."
-        />
-        {/* Tombol darurat lewati jika jaringan lambat */}
-        <Pressable
-          onPress={() => {
+          onSkip={() => {
             setShowSplash(false);
             if (isAuthenticated && user) {
               router.replace(isProfileComplete(user) ? '/dashboard' : '/complete-profile');
             }
           }}
-          style={{
-            position: 'absolute',
-            bottom: 30,
-            alignSelf: 'center',
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            paddingHorizontal: 20,
-            paddingVertical: 9,
-            borderRadius: 999,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.15,
-            shadowRadius: 6,
-            elevation: 4,
-            zIndex: 999,
-          }}
-        >
-          <Text style={{ color: '#0284C7', fontSize: 12.5, fontWeight: '700' }}>
-            Lewati & Lanjutkan ➔
-          </Text>
-        </Pressable>
+        />
       </View>
     );
   }

@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { aiService } from '@/services/aiService';
 import { PollutionHealthAnalysisData, PollutionHealthAnalysisContext } from '@/types/ai';
-import { PageTransitionSplash } from '@/components/splash/CityBuildingSplash';
+import { PageTransitionSplash } from '@/components/splash/AuraCloudSplash';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GRID_GAP = 12;
