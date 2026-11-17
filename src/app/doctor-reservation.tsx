@@ -52,6 +52,7 @@ export default function DoctorReservationScreen() {
   const [selectedDateIdx, setSelectedDateIdx] = useState(3); // Kamis 13 as in reference
   const [selectedTime, setSelectedTime] = useState('13.00'); // 13.00 as in reference
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [bookingCode, setBookingCode] = useState('AUR-782941');
 
   const topPadding =
     Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : insets.top + 6;
@@ -115,6 +116,7 @@ export default function DoctorReservationScreen() {
   }, [hospital]);
 
   const handleBooking = () => {
+    setBookingCode(`AUR-${Math.floor(100000 + Math.random() * 900000)}`);
     setShowSuccessModal(true);
   };
 
@@ -335,7 +337,7 @@ export default function DoctorReservationScreen() {
               <View style={[styles.bookingDetailRow, { borderBottomWidth: 0 }]}>
                 <Text style={styles.detailLabel}>Kode Reservasi</Text>
                 <Text style={[styles.detailValue, { color: '#0077F6', fontWeight: '800' }]}>
-                  AUR-{Math.floor(100000 + Math.random() * 900000)}
+                  {bookingCode}
                 </Text>
               </View>
             </View>

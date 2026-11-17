@@ -14,7 +14,7 @@ import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { AuraCloudSplash } from '@/components/splash/AuraCloudSplash';
 import { AuraColors } from '@/constants/aura-theme';
 import { AuthProvider } from '@/context/auth-context';
 import { applyGlobalFont } from '@/utils/apply-global-font';
@@ -62,7 +62,7 @@ export default function RootLayout() {
         <ThemeProvider value={AuraNavigationTheme}>
           <StatusBar style="light" />
           <View style={styles.container}>
-            <AnimatedSplashOverlay />
+            <AuraCloudSplash />
             <Stack
               screenOptions={{
                 headerShown: false,

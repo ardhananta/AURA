@@ -322,6 +322,8 @@ export const AudioToWavConverter = forwardRef<AudioToWavConverterRef, {}>((_, re
   );
 });
 
+AudioToWavConverter.displayName = 'AudioToWavConverter';
+
 const styles = StyleSheet.create({
   hiddenContainer: {
     width: 1,
