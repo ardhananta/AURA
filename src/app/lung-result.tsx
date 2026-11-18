@@ -121,7 +121,7 @@ export default function LungResultScreen() {
 
   return (
     <View style={styles.container}>
-      <RNStatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent />
+      <RNStatusBar barStyle="dark-content" />
 
       {/* ─── Top Header Navigation ─── */}
       <View style={[styles.headerBar, { paddingTop: topPadding }]}>

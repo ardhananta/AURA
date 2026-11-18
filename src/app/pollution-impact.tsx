@@ -393,7 +393,7 @@ export default function PollutionImpactScreen() {
 
   return (
     <View style={styles.container}>
-      <RNStatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <RNStatusBar barStyle="dark-content" />
 
       {/* ─── TAMPILAN 1: PETA INTERAKTIF 3D JAWA TENGAH (SESUAI REQUEST USER) ─── */}
       {pageViewMode === 'map' ? (

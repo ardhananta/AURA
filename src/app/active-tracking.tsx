@@ -338,7 +338,7 @@ export default function ActiveTrackingScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#E2E8F0' }}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle="dark-content" />
 
       {/* OpenStreetMap / MapLibre Map (No Google Maps API key / Never Black) */}
       <OsmMapView
