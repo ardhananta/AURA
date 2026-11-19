@@ -317,7 +317,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle="dark-content" />
 
       <ScrollView
         style={{ flex: 1, backgroundColor: '#FFFFFF' }}

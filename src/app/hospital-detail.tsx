@@ -55,7 +55,7 @@ export default function HospitalDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      <StatusBar barStyle="light-content" />
 
       {/* SCROLLABLE MAIN CONTENT */}
       <ScrollView

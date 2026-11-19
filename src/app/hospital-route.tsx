@@ -989,7 +989,7 @@ export default function HospitalRouteScreen() {
       {/* ============================================================ */}
       {mode === 'preview' ? (
         <View style={styles.fullscreen}>
-          <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
+          <StatusBar barStyle="dark-content" />
 
           {/* TOP HEADER BAR */}
           <View style={[styles.previewHeaderBar, { paddingTop: topPadding }]}>
@@ -1109,7 +1109,7 @@ export default function HospitalRouteScreen() {
         /* MODE 2: ACTIVE LIVE NAVIGATION MODE (3D GIS ala Google Maps)  */
         /* ============================================================ */
         <View style={styles.fullscreen}>
-          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+          <StatusBar barStyle="light-content" />
 
           {/* TOP TURN-BY-TURN BLUE BANNER */}
           <View style={[styles.navHeaderBanner, { paddingTop: topPadding }]}>

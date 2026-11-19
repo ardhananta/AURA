@@ -329,11 +329,7 @@ export default function SkinCheckScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar
-        barStyle={isLightBackdrop ? 'dark-content' : 'light-content'}
-        backgroundColor="transparent"
-        translucent
-      />
+      <StatusBar barStyle={isLightBackdrop ? 'dark-content' : 'light-content'} />
 
       {/* ─── 1. FULLSCREEN LIVE FACE-TRACKED CAMERA OR FALLBACK / SCANNED PHOTO ─── */}
       {permission?.granted && state === 'idle' ? (

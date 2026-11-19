@@ -43,6 +43,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { PageTransitionSplash } from '@/components/splash/AuraCloudSplash';
+import { JatengInteractiveMap } from '@/components/map/JatengInteractiveMap';
+import { JatengRegionHealth } from '@/services/jatengHealthApi';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -178,6 +180,28 @@ export default function PollutionImpactScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [isNavigatingToAi, setIsNavigatingToAi] = useState(false);
+
+  // Mode Tampilan: Peta Interaktif 3D Jateng (default) vs Detail Prakiraan 7 Hari
+  const [pageViewMode, setPageViewMode] = useState<'map' | 'forecast'>('map');
+  const [selectedJatengRegion, setSelectedJatengRegion] = useState<JatengRegionHealth | null>(null);
+
+  const handleMapRegionSelect = useCallback((region: JatengRegionHealth) => {
+    setSelectedJatengRegion(region);
+    setCurrentLocation({
+      name: region.name,
+      lat: region.latitude,
+      lon: region.longitude,
+      landscape: classifyTerrainByName(region.name),
+      isRealtime: false,
+    });
+  }, []);
+
+  const handleSwitchToForecast = useCallback((region?: JatengRegionHealth) => {
+    if (region) {
+      handleMapRegionSelect(region);
+    }
+    setPageViewMode('forecast');
+  }, [handleMapRegionSelect]);
 
   // Update landscape strictly according to real-time location & elevation
   const syncRealtimeLandscape = useCallback(
@@ -369,92 +393,223 @@ export default function PollutionImpactScreen() {
 
   return (
     <View style={styles.container}>
-      <RNStatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <RNStatusBar barStyle="dark-content" />
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        bounces={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={() => {
-              fetchAnalysis(true);
-              fetchNearbyHotspots(currentLocation.lat, currentLocation.lon);
-            }}
-            tintColor="#0284C7"
-          />
-        }
-      >
-        {/* Top Sky + Landmark Hero Container with DYNAMIC REALTIME LANDSCAPE IMAGE */}
-        <View style={[styles.heroWrapper, { height: HERO_HEIGHT }]}>
-          <Image
-            source={getLandscapeAsset(activeLandscape)}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            contentPosition="bottom"
-            transition={300}
-          />
+      {/* ─── TAMPILAN 1: PETA INTERAKTIF 3D JAWA TENGAH (SESUAI REQUEST USER) ─── */}
+      {pageViewMode === 'map' ? (
+        <ScrollView
+          style={styles.mapScrollView}
+          contentContainerStyle={[styles.mapScrollContent, { paddingTop: topPadding }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Top Bar Khusus Peta */}
+          <View style={styles.mapTopHeaderBar}>
+            <Pressable
+              onPress={() => router.back()}
+              style={styles.backButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="arrow-back" size={22} color="#0284C7" />
+            </Pressable>
 
-          <View style={[styles.heroContentOverlay, { paddingTop: topPadding }]}>
-            {/* Header Navigation Bar */}
-            <View style={styles.headerBar}>
+            {/* Segment Tab Switcher: Peta 3D Jateng vs Prakiraan 7 Hari */}
+            <View style={styles.topSegmentContainer}>
               <Pressable
-                onPress={() => router.back()}
-                style={styles.backButton}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="arrow-back" size={22} color="#0284C7" />
-              </Pressable>
-
-              {/* Location Picker Trigger */}
-              <Pressable
-                onPress={() => setShowLocationPicker(true)}
-                style={styles.headerLocationButton}
+                style={[styles.topSegmentButton, styles.topSegmentButtonActive]}
+                onPress={() => setPageViewMode('map')}
               >
                 <Ionicons
-                  name={currentLocation.zone_id ? 'location' : 'navigate-circle'}
-                  size={16}
-                  color="#0284C7"
+                  name="map"
+                  size={14}
+                  color="#FFFFFF"
+                  style={{ marginRight: 5 }}
                 />
-                <Text numberOfLines={1} style={styles.headerLocationTitle}>
-                  {analysisData?.location_name || currentLocation.name}
+                <Text style={[styles.topSegmentText, styles.topSegmentTextActive]}>
+                  Peta 3D
                 </Text>
-                <Ionicons name="chevron-down" size={16} color="#64748B" />
               </Pressable>
 
-              <View style={styles.headerRightActions}>
+              <Pressable
+                style={styles.topSegmentButton}
+                onPress={() => setPageViewMode('forecast')}
+              >
+                <Ionicons
+                  name="calendar"
+                  size={14}
+                  color="#0284C7"
+                  style={{ marginRight: 5 }}
+                />
+                <Text style={styles.topSegmentText}>
+                  Prakiraan 7H
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.headerRightActions}>
+              <Pressable
+                onPress={() => router.push('/daily-journey')}
+                style={styles.backButton}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityLabel="Tracking Harian"
+              >
+                <Ionicons name="map-outline" size={20} color="#0284C7" />
+              </Pressable>
+
+              <Pressable
+                onPress={handleNavigateToAiImpact}
+                style={[styles.backButton, styles.aiHeaderBtn]}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityLabel="Analisis Dampak AI"
+              >
+                <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Komponen Peta Interaktif Jawa Tengah (3D Choropleth, Ikon Landmark, dan Data Open Data Jateng) */}
+          <JatengInteractiveMap
+            selectedRegionId={selectedJatengRegion?.id || 'reg_33_74'}
+            onSelectRegion={handleMapRegionSelect}
+          />
+
+          {/* CTA Banner ke Detail Prakiraan Cuaca Wilayah Terpilih */}
+          <View style={styles.exploreForecastCtaCard}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <View style={styles.ctaBadgeRow}>
+                <Ionicons name="sparkles" size={12} color="#0284C7" style={{ marginRight: 4 }} />
+                <Text style={styles.ctaBadgeText}>ANALISIS MENDALAM 7 HARI</Text>
+              </View>
+              <Text style={styles.exploreForecastCtaTitle}>
+                Prakiraan Lengkap & Sensor Cuaca
+              </Text>
+              <Text style={styles.exploreForecastCtaDesc}>
+                Buka grafik polusi jam-demi-jam, kelembaban, kecepatan angin & tingkat kemacetan untuk{' '}
+                <Text style={{ fontWeight: '700', color: '#0284C7' }}>
+                  {selectedJatengRegion?.name || currentLocation.name}
+                </Text>.
+              </Text>
+            </View>
+            <Pressable
+              style={styles.exploreForecastCtaBtn}
+              onPress={() => handleSwitchToForecast(selectedJatengRegion || undefined)}
+            >
+              <Text style={styles.exploreForecastCtaBtnText}>Buka Detail</Text>
+              <Ionicons name="arrow-forward" size={15} color="#FFFFFF" />
+            </Pressable>
+          </View>
+
+          <View style={{ height: insets.bottom + 40 }} />
+        </ScrollView>
+      ) : (
+        /* ─── TAMPILAN 2: DETAIL PRAKIRAAN 7 HARI & DAMPAK LINGKUNGAN ─── */
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                fetchAnalysis(true);
+                fetchNearbyHotspots(currentLocation.lat, currentLocation.lon);
+              }}
+              tintColor="#0284C7"
+            />
+          }
+        >
+          {/* Top Sky + Landmark Hero Container with DYNAMIC REALTIME LANDSCAPE IMAGE */}
+          <View style={[styles.heroWrapper, { height: HERO_HEIGHT }]}>
+            <Image
+              source={getLandscapeAsset(activeLandscape)}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              contentPosition="bottom"
+              transition={300}
+            />
+
+            <View style={[styles.heroContentOverlay, { paddingTop: topPadding }]}>
+              {/* Header Navigation Bar */}
+              <View style={styles.headerBar}>
                 <Pressable
-                  onPress={() => router.push('/daily-journey')}
+                  onPress={() => router.back()}
                   style={styles.backButton}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityLabel="Tracking Harian"
                 >
-                  <Ionicons name="map-outline" size={20} color="#0284C7" />
+                  <Ionicons name="arrow-back" size={22} color="#0284C7" />
+                </Pressable>
+
+                {/* Location Picker Trigger */}
+                <Pressable
+                  onPress={() => setShowLocationPicker(true)}
+                  style={styles.headerLocationButton}
+                >
+                  <Ionicons
+                    name={currentLocation.zone_id ? 'location' : 'navigate-circle'}
+                    size={16}
+                    color="#0284C7"
+                  />
+                  <Text numberOfLines={1} style={styles.headerLocationTitle}>
+                    {analysisData?.location_name || currentLocation.name}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color="#64748B" />
+                </Pressable>
+
+                <View style={styles.headerRightActions}>
+                  <Pressable
+                    onPress={handleNavigateToAiImpact}
+                    style={[styles.backButton, styles.aiHeaderBtn]}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityLabel="Analisis Dampak AI"
+                  >
+                    <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      fetchAnalysis();
+                      fetchNearbyHotspots(currentLocation.lat, currentLocation.lon);
+                    }}
+                    style={styles.backButton}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="refresh" size={20} color="#0284C7" />
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Segment Switcher di atas Hero agar user bisa kembali ke Peta dengan 1 tap */}
+              <View style={styles.forecastTopSegmentContainer}>
+                <Pressable
+                  style={styles.forecastTopSegmentBtn}
+                  onPress={() => setPageViewMode('map')}
+                >
+                  <Ionicons
+                    name="map"
+                    size={13}
+                    color="#FFFFFF"
+                    style={{ marginRight: 5 }}
+                  />
+                  <Text style={styles.forecastTopSegmentText}>
+                    Peta 3D Jateng
+                  </Text>
                 </Pressable>
 
                 <Pressable
-                  onPress={handleNavigateToAiImpact}
-                  style={[styles.backButton, styles.aiHeaderBtn]}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityLabel="Analisis Penyakit Berdasarkan Aktivitas dan Polusi"
+                  style={[styles.forecastTopSegmentBtn, styles.forecastTopSegmentBtnActive]}
+                  onPress={() => setPageViewMode('forecast')}
                 >
-                  <Ionicons name="sparkles" size={18} color="#FFFFFF" />
-                </Pressable>
-
-                <Pressable
-                  onPress={() => {
-                    fetchAnalysis();
-                    fetchNearbyHotspots(currentLocation.lat, currentLocation.lon);
-                  }}
-                  style={styles.backButton}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Ionicons name="refresh" size={20} color="#0284C7" />
+                  <Ionicons
+                    name="calendar"
+                    size={13}
+                    color="#0284C7"
+                    style={{ marginRight: 5 }}
+                  />
+                  <Text style={[styles.forecastTopSegmentText, styles.forecastTopSegmentTextActive]}>
+                    Prakiraan 7 Hari
+                  </Text>
                 </Pressable>
               </View>
-            </View>
 
             {/* REAL-TIME TERRAIN BADGE INDICATOR (Derived from User's exact GPS & Altitude) */}
             <View style={styles.terrainBadgeContainer}>
@@ -943,6 +1098,7 @@ export default function PollutionImpactScreen() {
             <View style={{ height: insets.bottom + 40 }} />
         </LinearGradient>
       </ScrollView>
+    )}
 
       {/* MODAL: Switch Location (Real-time User GPS & Real-time Nearby Hotspots) */}
       <Modal
@@ -1158,6 +1314,142 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#4CBDE3',
+  },
+  mapScrollView: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  mapScrollContent: {
+    flexGrow: 1,
+  },
+  mapTopHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  topSegmentContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 22,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  topSegmentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 18,
+  },
+  topSegmentButtonActive: {
+    backgroundColor: '#0284C7',
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  topSegmentText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0284C7',
+  },
+  topSegmentTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  forecastTopSegmentContainer: {
+    flexDirection: 'row',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    borderRadius: 20,
+    padding: 3,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  forecastTopSegmentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+  },
+  forecastTopSegmentBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  forecastTopSegmentText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  forecastTopSegmentTextActive: {
+    color: '#0284C7',
+    fontWeight: '700',
+  },
+  exploreForecastCtaCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 16,
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0F2FE',
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  ctaBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  ctaBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0284C7',
+    letterSpacing: 0.5,
+  },
+  exploreForecastCtaTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  exploreForecastCtaDesc: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  exploreForecastCtaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    gap: 4,
+  },
+  exploreForecastCtaBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   scrollView: {
     flex: 1,

@@ -249,7 +249,7 @@ export default function AiPollutionImpactScreen() {
 
   return (
     <View style={styles.container}>
-      <RNStatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent />
+      <RNStatusBar barStyle="dark-content" />
 
       <ScrollView
         style={styles.scrollView}

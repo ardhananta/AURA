@@ -275,7 +275,7 @@ export function AuraCloudSplash({
       style={[styles.root, containerStyle]}
       pointerEvents={isStartup || onSkip ? 'box-none' : 'auto'}
     >
-      <StatusBar barStyle="light-content" backgroundColor="#2B71EE" translucent />
+      <StatusBar barStyle="light-content" />
 
       {/* Tap di mana saja untuk skip langsung pada splash awal */}
       {isStartup && <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip} />}

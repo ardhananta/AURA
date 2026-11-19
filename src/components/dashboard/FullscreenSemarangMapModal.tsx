@@ -136,7 +136,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
   const [searchResults, setSearchResults] = useState<RoadSearchEntry[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchTarget, setSearchTarget] = useState<RoadSearchEntry | null>(null);
-  const searchInputRef = useRef<TextInput>(null);
+  const searchInputRef = useRef<any>(null);
 
   // Filtered zones based on category chip
   const displayedZones = useMemo(() => {
@@ -745,7 +745,7 @@ export const FullscreenSemarangMapModal: React.FC<FullscreenSemarangMapModalProp
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+        <StatusBar barStyle="dark-content" />
 
         {/* 1. INTERACTIVE 3D GIS MAP */}
         <WebView
